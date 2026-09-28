@@ -34,11 +34,24 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 fun HomeSceneBackdrop(
     wallpaper: ImageBitmap?,
     railWidth: Dp,
+    /**
+     * true = 这层放**清晰**壁纸，模糊交给玻璃卡里的 drawBackdrop 去做。
+     *
+     * 液态玻璃模式必须这样：backdrop 抓的是**这一层已经画好的像素**，
+     * 如果这层自己先糊了一遍又压了一层黑纱，玻璃卡折射到的就是一团黑 ——
+     * 之前"读到的不是选的图，而是黑底"就是这么来的。
+     */
+    sharp: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val isDark = LocalThemeModeState.current.isDark
-    // 底纱：浅色几乎不压，深色压重
-    val scrim = if (isDark) 0.42f else 0.08f
+    // 底纱：浅色几乎不压，深色压重；清晰模式再轻一档，别把颜色压没了
+    val scrim = when {
+        sharp && isDark -> 0.26f
+        sharp -> 0.04f
+        isDark -> 0.42f
+        else -> 0.08f
+    }
     // 导轨条：用主题的面板色，浅色下轻轻一层保住白字可读
     val railAlphaTop = if (isDark) 0.60f else 0.22f
     val railAlphaMid = if (isDark) 0.44f else 0.14f
@@ -68,7 +81,13 @@ fun HomeSceneBackdrop(
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
                     .fillMaxSize()
-                    .blur(32.dp, edgeTreatment = BlurredEdgeTreatment.Rectangle),
+                    .then(
+                        if (sharp) {
+                            Modifier
+                        } else {
+                            Modifier.blur(32.dp, edgeTreatment = BlurredEdgeTreatment.Rectangle)
+                        }
+                    ),
             )
         }
 

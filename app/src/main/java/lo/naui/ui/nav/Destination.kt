@@ -11,6 +11,6 @@ import top.yukonga.miuix.kmp.icon.extended.Settings
 enum class Dest(val label: String, val icon: ImageVector) {
     Home("主页", MiuixIcons.Home),
     Modules("功能", MiuixIcons.Layers),
-    Overview("概览", MiuixIcons.GridView),
+    Overview("Agent", MiuixIcons.GridView),
     Settings("设置", MiuixIcons.Settings),
 }

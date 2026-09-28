@@ -51,7 +51,11 @@ import lo.naui.ui.home.HomeSceneBackdrop
 import lo.naui.ui.home.HomeSceneRail
 import lo.naui.ui.home.HomeScreen
 import lo.naui.ui.nav.Dest
-import lo.naui.ui.pages.SimplePage
+import lo.naui.ui.agent.AgentConfigScreen
+import lo.naui.ui.agent.AgentScreen
+import lo.naui.ui.files.FileManagerScreen
+import lo.naui.ui.pages.ToolsScreen
+import lo.naui.ui.theme.CardStyle
 import lo.naui.ui.settings.AboutScreen
 import lo.naui.ui.settings.SettingsScreen
 import lo.naui.ui.settings.ThemeScreen
@@ -69,7 +73,7 @@ private const val COMPACT_WIDTH_DP = 600f
 
 private val NAV_DESTS = listOf(Dest.Home, Dest.Modules, Dest.Overview, Dest.Settings)
 
-private enum class Sub { None, Theme, About }
+private enum class Sub { None, Theme, About, Files, AgentConfig }
 
 /**
  * 外壳 —— 结构对齐参考项目（Aster 的 AsterAppShell）：
@@ -98,7 +102,10 @@ fun AppShell(prefs: ThemePrefs) {
     val panorama = prefs.globalLayout == GlobalLayout.Panorama
 
     // 全景模式下**所有页面**都走左侧导轨（不再切到底部胶囊），导航位置始终一致
-    // 概览那个入口可以在「主题 → 导航与外壳 → 侧栏设置」里关掉
+    // 液态玻璃模式下，背景层要交出清晰图给 drawBackdrop 去糊
+    val liquidGlass = prefs.cardStyle == CardStyle.Liquid
+
+    // Agent 那个入口可以在「主题 → 导航与外壳 → 侧栏设置」里关掉
     val railDests = if (prefs.railShowOverview) NAV_DESTS else NAV_DESTS.filter { it != Dest.Overview }
 
     val showSceneRail = panorama
@@ -147,22 +154,12 @@ fun AppShell(prefs: ThemePrefs) {
                     wallpaper = wallpaper,
                     backdrop = backdrop,
                 )
-                Dest.Modules -> SimplePage(
-                    title = "功能",
-                    subtitle = "这一页还是空的",
+                Dest.Modules -> ToolsScreen(
+                    onOpenFiles = { sub = Sub.Files },
                     backdrop = backdrop,
-                    items = listOf(
-                        "等着接东西" to "在 AppShell 的 pageFor 里把这一页换成你自己的内容",
-                        "外壳是照抄的" to "导轨宽度、切页曲线、玻璃卡都和参考项目一致",
-                    ),
                 )
-                Dest.Overview -> SimplePage(
-                    title = "概览",
-                    subtitle = "这一页还是空的",
-                    backdrop = backdrop,
-                    items = listOf(
-                        "等着接东西" to "要放统计就放统计，要放别的就放别的",
-                    ),
+                Dest.Overview -> AgentScreen(
+                    onOpenConfig = { sub = Sub.AgentConfig },
                 )
                 Dest.Settings -> SettingsScreen(
                     prefs = prefs,
@@ -172,6 +169,8 @@ fun AppShell(prefs: ThemePrefs) {
             }
             Sub.Theme -> ThemeScreen(prefs, onBack = { sub = Sub.None })
             Sub.About -> AboutScreen(onBack = { sub = Sub.None })
+            Sub.Files -> FileManagerScreen(onBack = { sub = Sub.None })
+            Sub.AgentConfig -> AgentConfigScreen(onBack = { sub = Sub.None })
         }
     }
 
@@ -190,6 +189,9 @@ fun AppShell(prefs: ThemePrefs) {
                     HomeSceneBackdrop(
                         wallpaper = wallpaper,
                         railWidth = if (showSceneRail) sceneRailWidth else 0.dp,
+                        // 液态玻璃模式下这层放清晰图 —— 模糊交给玻璃卡里的 blur 做。
+                        // 这层要是自己先糊一遍再压黑纱，玻璃卡折射出来就是一团黑。
+                        sharp = liquidGlass,
                     )
                 } else {
                     Box(Modifier.fillMaxSize().background(MiuixTheme.colorScheme.surface))
@@ -270,13 +272,28 @@ fun AppShell(prefs: ThemePrefs) {
                                         durationMillis = 460,
                                         easing = FastOutSlowInEasing,
                                     )
-                                    slideInVertically(
-                                        animationSpec = spec,
-                                        initialOffsetY = { h -> dir * h },
-                                    ).togetherWith(
+                                    // 光上下滑会有几帧两张图硬碰硬，叠一层交叉淡化就顺了：
+                                    // 旧页先淡出，新页晚 120ms 再淡进来，中间不会互相糊在一起
+                                    (
+                                        slideInVertically(
+                                            animationSpec = spec,
+                                            initialOffsetY = { h -> dir * h },
+                                        ) + fadeIn(
+                                            animationSpec = tween(
+                                                durationMillis = 300,
+                                                delayMillis = 120,
+                                                easing = FastOutSlowInEasing,
+                                            )
+                                        )
+                                        ).togetherWith(
                                         slideOutVertically(
                                             animationSpec = spec,
                                             targetOffsetY = { h -> -dir * h },
+                                        ) + fadeOut(
+                                            animationSpec = tween(
+                                                durationMillis = 220,
+                                                easing = FastOutSlowInEasing,
+                                            )
                                         )
                                     )
                                 }

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- app_name 由 app/build.gradle.kts 按构建类型生成：
+         debug = 雫·调试，release = 雫 -->
+</resources>

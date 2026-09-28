@@ -1,0 +1,81 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # ============================================================
+  # 快速检查：只编 Kotlin（不打包、不 dex）
+  #
+  # 为什么单独拎出来：完整构建要跑 AAPT2 / D8 / 打包签名，三分钟起步；
+  # 而绝大多数红都是 Kotlin 编译错 —— 这一步通常 40~60 秒就有结果。
+  # 下面 build 依赖它，编不过就不往打包那步走了。
+  # ============================================================
+  quickcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Gradle 9.7.0
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.7.0'
+
+      - name: Kotlin 编译检查（快速）
+        run: gradle compileReleaseKotlin --no-daemon
+
+  build:
+    needs: quickcheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Gradle 9.7.0
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.7.0'
+
+      # 只出 release 版（带日志的 debug 版不再推送）
+      - name: Build release APK
+        run: gradle assembleRelease --no-daemon --stacktrace
+
+      - name: Collect APK
+        run: |
+          mkdir -p out
+          cp app/build/outputs/apk/release/*.apk out/nakour.apk
+          ls -la out
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nakour-apk
+          path: out/*.apk
+          if-no-files-found: error
+
+      - name: Publish Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*.apk
+          name: Nakour ${{ github.ref_name }}
+          generate_release_notes: true

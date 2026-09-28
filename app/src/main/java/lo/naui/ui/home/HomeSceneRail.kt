@@ -39,6 +39,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -59,10 +60,16 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.abs
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
+import lo.naui.sys.Metrics
+import lo.naui.sys.MetricsSnapshot
 import lo.naui.ui.nav.Dest
 import lo.naui.ui.theme.ClockStyle
+import lo.naui.ui.theme.InfoMetric
 import lo.naui.ui.theme.LocalThemeModeState
+import lo.naui.ui.theme.Prefs
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -87,6 +94,9 @@ private val SceneRailLabelledHeight = 330.dp
  * 背景是**那张主页大图的模糊版**（整条导轨自己画一层），再按明暗压一层黑：
  * 深色模式下压得更重，所以白字在亮照片上也站得住。
  * 右边用横向渐变化开，和主页的模糊背景自然接上，不会切出一条硬边。
+ *
+ * 自上而下：时钟 → 电量（可隐藏）→ 信息块（可隐藏）→ 导航项。
+ * 信息块**不是玻璃卡**，就是一块带上下细线的纯文字区，不走液态玻璃那套折射。
  */
 @Composable
 fun HomeSceneRail(
@@ -95,9 +105,26 @@ fun HomeSceneRail(
     onSelect: (Dest) -> Unit,
     clockStyle: ClockStyle,
     wallpaper: ImageBitmap? = null,
+    showBattery: Boolean = true,
+    showInfo: Boolean = true,
+    infoLines: List<InfoMetric> = emptyList(),
     modifier: Modifier = Modifier,
 ) {
     val isDark = LocalThemeModeState.current.isDark
+    val context = LocalContext.current
+    val useRoot = Prefs.current?.useRoot ?: true
+
+    // 信息块要的那几个数：进来之后每 2 秒采一次
+    var snapshot by remember { mutableStateOf(MetricsSnapshot()) }
+    val activeLines = remember(infoLines) { infoLines.filter { it != InfoMetric.None } }
+
+    LaunchedEffect(showInfo, activeLines, useRoot) {
+        if (!showInfo || activeLines.isEmpty()) return@LaunchedEffect
+        while (true) {
+            snapshot = Metrics.sample(context, useRoot)
+            delay(2000)
+        }
+    }
 
     Box(modifier) {
         // ---- 导轨自己的背景 ----
@@ -155,15 +182,22 @@ fun HomeSceneRail(
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Spacer(Modifier.height(if (compact) 10.dp else 28.dp))
+
                 if (!compact) {
                     SceneClock(clockStyle)
                     Spacer(Modifier.height(24.dp))
-                    SceneBattery()
+                    if (showBattery) {
+                        SceneBattery()
+                    }
+                    if (showInfo && activeLines.isNotEmpty()) {
+                        Spacer(Modifier.height(14.dp))
+                        RailInfoBlock(items = activeLines, snap = snapshot)
+                    }
                 }
 
                 Spacer(Modifier.weight(1f))
 
-                // 全部导航项都在（含「主页」）
+                // 全部导航项都在（含「主页」）—— 概览那个入口可以在侧栏设置里关掉
                 destinations.forEach { d ->
                     SceneRailItem(
                         selected = current == d,
@@ -188,6 +222,122 @@ fun HomeSceneRail(
         }
     }
 }
+
+/* ---------------- 信息块 ---------------- */
+
+/**
+ * 左栏信息块。
+ *
+ * 上下各一条 1dp 的细线把它的范围标出来 —— 这两条线是**块自己的边界**，
+ * 不是卡片描边，所以它不参与液态玻璃那套折射。
+ */
+@Composable
+private fun RailInfoBlock(items: List<InfoMetric>, snap: MetricsSnapshot) {
+    val rule = SceneOnWallpaper.copy(alpha = 0.32f)
+    val labelColor = SceneOnWallpaper.copy(alpha = 0.58f)
+    val valueColor = SceneOnWallpaper.copy(alpha = 0.92f)
+
+    Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
+        // 上细线
+        Box(Modifier.fillMaxWidth().height(1.dp).background(rule))
+
+        Column(
+            Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            items.forEach { metric ->
+                val label = metricLabel(metric, snap)
+                val value = metricValue(metric, snap)
+                if (metric.wide) {
+                    // 窄导轨里一行放不下，拆两行
+                    Column(Modifier.fillMaxWidth()) {
+                        Text(
+                            label,
+                            fontSize = 8.5.sp,
+                            color = labelColor,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Text(
+                            value,
+                            fontSize = 10.sp,
+                            color = valueColor,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                } else {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            label,
+                            fontSize = 8.5.sp,
+                            color = labelColor,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            value,
+                            fontSize = 10.sp,
+                            color = valueColor,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.End,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+            }
+        }
+
+        // 下细线
+        Box(Modifier.fillMaxWidth().height(1.dp).background(rule))
+    }
+}
+
+private fun metricLabel(m: InfoMetric, snap: MetricsSnapshot): String = when (m) {
+    InfoMetric.BatteryTemp -> "电池"
+    InfoMetric.CpuTemp -> "CPU"
+    InfoMetric.Ram -> "内存"
+    InfoMetric.CpuUsage -> "占用"
+    InfoMetric.GpuUsage -> "GPU"
+    InfoMetric.BatteryPower -> "功率"
+    InfoMetric.BatteryVi -> "电压电流"
+    InfoMetric.Network -> snap.carrier.ifBlank { "网络" }
+    InfoMetric.None -> ""
+}
+
+private fun metricValue(m: InfoMetric, snap: MetricsSnapshot): String = when (m) {
+    InfoMetric.BatteryTemp -> snap.batteryTempC?.let { one(it) + "°" } ?: "—"
+    InfoMetric.CpuTemp -> snap.cpuTempC?.let { zero(it) + "°" } ?: "—"
+    InfoMetric.Ram -> snap.ramPercent?.let { zero(it) + "%" } ?: "—"
+    InfoMetric.CpuUsage -> snap.cpuUsagePercent?.let { zero(it) + "%" } ?: "—"
+    InfoMetric.GpuUsage -> snap.gpuPercent?.let { zero(it) + "%" } ?: "—"
+    InfoMetric.BatteryPower -> snap.batteryPowerW?.let {
+        // 充电是正的、放电是负的，正数前面补个 + 看着更明确
+        (if (it >= 0f) "+" else "-") + one(abs(it)) + "W"
+    } ?: "—"
+    InfoMetric.BatteryVi -> {
+        val v = snap.batteryVoltageV
+        val a = snap.batteryCurrentA
+        if (v != null && a != null) two(v) + "V " + two(a) + "A" else "—"
+    }
+    InfoMetric.Network -> snap.netRateText
+    InfoMetric.None -> ""
+}
+
+private fun zero(v: Float): String = v.roundToInt().toString()
+
+private fun one(v: Float): String = ((v * 10f).roundToInt() / 10f).toString()
+
+private fun two(v: Float): String = ((v * 100f).roundToInt() / 100f).toString()
+
+/* ---------------- 导航项 ---------------- */
 
 @Composable
 private fun SceneRailItem(

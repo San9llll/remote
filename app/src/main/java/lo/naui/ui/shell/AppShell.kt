@@ -97,6 +97,9 @@ fun AppShell(prefs: ThemePrefs) {
     val panorama = prefs.globalLayout == GlobalLayout.Panorama
 
     // 全景模式下**所有页面**都走左侧导轨（不再切到底部胶囊），导航位置始终一致
+    // 概览那个入口可以在「主题 → 导航与外壳 → 侧栏设置」里关掉
+    val railDests = if (prefs.railShowOverview) NAV_DESTS else NAV_DESTS.filter { it != Dest.Overview }
+
     val showSceneRail = panorama
     val standardBottomBar = !panorama && useBottomNav
     val standardRail = !panorama && !useBottomNav
@@ -144,8 +147,9 @@ fun AppShell(prefs: ThemePrefs) {
                     backdrop = backdrop,
                 )
                 Dest.Modules -> SimplePage(
-                    title = "模块",
+                    title = "功能",
                     subtitle = "这一页还是空的",
+                    backdrop = backdrop,
                     items = listOf(
                         "等着接东西" to "在 AppShell 的 pageFor 里把这一页换成你自己的内容",
                         "外壳是照抄的" to "导轨宽度、切页曲线、玻璃卡都和参考项目一致",
@@ -154,6 +158,7 @@ fun AppShell(prefs: ThemePrefs) {
                 Dest.Overview -> SimplePage(
                     title = "概览",
                     subtitle = "这一页还是空的",
+                    backdrop = backdrop,
                     items = listOf(
                         "等着接东西" to "要放统计就放统计，要放别的就放别的",
                     ),
@@ -178,7 +183,7 @@ fun AppShell(prefs: ThemePrefs) {
                 Row(Modifier.weight(1f).fillMaxWidth()) {
                     if (standardRail) {
                         NavigationRail {
-                            NAV_DESTS.forEach { d ->
+                            railDests.forEach { d ->
                                 NavigationRailItem(
                                     selected = current == d && sub == Sub.None,
                                     onClick = { current = d; sub = Sub.None },
@@ -268,7 +273,7 @@ fun AppShell(prefs: ThemePrefs) {
                         modifier = Modifier.background(MiuixTheme.colorScheme.surface)
                             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
                     ) {
-                        NAV_DESTS.forEach { d ->
+                        railDests.forEach { d ->
                             NavigationBarItem(
                                 selected = current == d && sub == Sub.None,
                                 onClick = { current = d; sub = Sub.None },
@@ -287,11 +292,14 @@ fun AppShell(prefs: ThemePrefs) {
                 exit = slideOutHorizontally(tween(220)) { -it / 3 } + fadeOut(tween(200)),
             ) {
                 HomeSceneRail(
-                    destinations = NAV_DESTS,
+                    destinations = railDests,
                     current = current,
                     onSelect = { current = it; sub = Sub.None },
                     clockStyle = prefs.clockStyle,
                     wallpaper = wallpaper,
+                    showBattery = prefs.railShowBattery,
+                    showInfo = prefs.railShowInfo,
+                    infoLines = prefs.railInfoList(),
                     modifier = Modifier
                         .align(Alignment.TopStart)
                         .width(sceneRailWidth)

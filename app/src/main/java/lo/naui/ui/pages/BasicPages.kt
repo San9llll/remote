@@ -28,6 +28,7 @@ fun SimplePage(
     title: String,
     subtitle: String,
     items: List<Pair<String, String>>,
+    backdrop: com.kyant.backdrop.Backdrop? = null,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -48,7 +49,7 @@ fun SimplePage(
 
         items.forEach { (head, body) ->
             GlassCard(
-                backdrop = null,
+                backdrop = backdrop,
                 modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
                 contentPadding = 18.dp,
             ) {

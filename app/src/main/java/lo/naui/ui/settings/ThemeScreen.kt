@@ -33,6 +33,7 @@ import lo.naui.ui.common.Option
 import lo.naui.ui.common.OptionDialog
 import lo.naui.ui.common.SectionTitle
 import lo.naui.ui.component.IndicatorSwitchPreference
+import lo.naui.ui.theme.CardStyle
 import lo.naui.ui.theme.ClockStyle
 import lo.naui.ui.theme.DarkMode
 import lo.naui.ui.theme.Density
@@ -85,6 +86,13 @@ private val StyleDotGap = 4.dp
  */
 @Composable
 fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
+    // 侧栏设置是这一页里的子页，不占 AppShell 的一级导航
+    var railPage by remember { mutableStateOf(false) }
+    if (railPage) {
+        RailSettingsScreen(prefs = prefs, onBack = { railPage = false })
+        return
+    }
+
     val isDark = LocalThemeModeState.current.isDark
     val seed = prefs.keyColor
     val ctx = androidx.compose.ui.platform.LocalContext.current
@@ -206,6 +214,18 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
                 }
             }
 
+            item(key = "card") {
+                SectionTitle("卡片")
+                SettingsCard {
+                    ArrowPreference(
+                        title = "卡片风格",
+                        summary = prefs.cardStyle.summary,
+                        startAction = { SettingsIcon(MiuixIcons.Layers) },
+                        onClick = { dialog = "cardstyle" },
+                    )
+                }
+            }
+
             item(key = "presets") {
                 SectionTitle("基准色（" + PresetColors.list.size + " 种）")
                 Card(
@@ -289,6 +309,16 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
                         summary = prefs.clockStyle.summary,
                         startAction = { SettingsIcon(MiuixIcons.Notes) },
                         onClick = { dialog = "clock" },
+                    )
+                    ArrowPreference(
+                        title = "侧栏设置",
+                        summary = if (prefs.railShowOverview) {
+                            "侧栏模块 · 信息内容（概览入口开着）"
+                        } else {
+                            "侧栏模块 · 信息内容（概览入口已隐藏）"
+                        },
+                        startAction = { SettingsIcon(MiuixIcons.Tune) },
+                        onClick = { railPage = true },
                     )
                 }
             }
@@ -435,6 +465,13 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
             options = ClockStyle.entries.map { Option(it.id, it.label, it.summary) },
             currentId = prefs.clockStyle.id,
             onPick = { id -> ClockStyle.entries.firstOrNull { it.id == id }?.let { prefs.updateClockStyle(it) } },
+            onDismiss = { dialog = null },
+        )
+        "cardstyle" -> OptionDialog(
+            show = true, title = "卡片风格",
+            options = CardStyle.entries.map { Option(it.id, it.label, it.summary) },
+            currentId = prefs.cardStyle.id,
+            onPick = { id -> prefs.updateCardStyle(CardStyle.of(id)) },
             onDismiss = { dialog = null },
         )
     }

@@ -105,6 +105,38 @@ enum class Density(val id: String, val label: String, val summary: String, val d
     }
 }
 
+/** 卡片方案：默认还是原来那套仿玻璃（纯 2D，最稳），液态玻璃是可选项 */
+enum class CardStyle(val id: String, val label: String, val summary: String) {
+    Legacy("legacy", "仿玻璃", "纯 2D 叠层，零 GPU 折射 —— 默认，最不容易出岔子"),
+    Liquid("liquid", "液态玻璃", "走社区库做真折射，观感更好，但吃 GPU");
+
+    companion object { fun of(id: String?) = entries.firstOrNull { it.id == id } ?: Legacy }
+}
+
+/** 侧栏信息块里一行能显示什么 */
+enum class InfoMetric(val id: String, val label: String, val summary: String) {
+    None("none", "不显示", "这一行留空"),
+    BatteryTemp("battery_temp", "电池温度", "电池的摄氏温度，公开 API 就能拿"),
+    CpuTemp("cpu_temp", "CPU 温度", "热区里挑一个像 CPU / SOC 的"),
+    Ram("ram", "内存占用", "已用 / 总内存的百分比"),
+    CpuUsage("cpu_usage", "CPU 使用率", "/proc/stat 两次采样的差值"),
+    GpuUsage("gpu_usage", "GPU 占用率", "要看 GPU 性能节点，多半得 root"),
+    BatteryPower("battery_power", "电池功率", "充电为正、放电为负"),
+    BatteryVi("battery_vi", "电压和电流", "电压 V + 电流 A，窄栏里拆两行写"),
+    Network("network", "网络", "运营商名称 + 实时上下行速率");
+
+    /** 窄导轨里一行放不下，改成上下两行 */
+    val wide: Boolean get() = this == BatteryVi || this == Network
+
+    companion object { fun of(id: String?) = entries.firstOrNull { it.id == id } ?: None }
+}
+
+/** 侧栏信息块最多几行 */
+const val INFO_LINE_COUNT = 5
+
+/** 侧栏信息块的出厂内容 */
+const val DEFAULT_RAIL_INFO_LINES = "battery_temp,cpu_temp,ram,none,none"
+
 /** 当前密度对应的 dpi 数值（滑块用） */
 fun Density.densityOf(): Int = dpi
 
@@ -242,5 +274,68 @@ class ThemePrefs(context: Context) {
     /** 首页拉到壁纸后，把算出来的种子存下来给主题用 */
     fun saveWallpaperSeed(seed: Int, isLight: Boolean) {
         WallpaperColorTheme.setSeed(sp, seed, isLight)
+    }
+
+    /* ---------- 卡片方案 ---------- */
+
+    var cardStyle by mutableStateOf(CardStyle.of(sp.getString("card_style", null)))
+
+    fun updateCardStyle(v: CardStyle) {
+        cardStyle = v
+        sp.edit().putString("card_style", v.id).apply()
+    }
+
+    /* ---------- 侧栏 ---------- */
+
+    /** 导轨上那颗电池 */
+    var railShowBattery by mutableStateOf(sp.getBoolean("rail_battery", true))
+
+    fun updateRailShowBattery(v: Boolean) {
+        railShowBattery = v
+        sp.edit().putBoolean("rail_battery", v).apply()
+    }
+
+    /** 导轨上那个信息块 */
+    var railShowInfo by mutableStateOf(sp.getBoolean("rail_info", true))
+
+    fun updateRailShowInfo(v: Boolean) {
+        railShowInfo = v
+        sp.edit().putBoolean("rail_info", v).apply()
+    }
+
+    /** 导轨上「概览」那个入口 */
+    var railShowOverview by mutableStateOf(sp.getBoolean("rail_overview", true))
+
+    fun updateRailShowOverview(v: Boolean) {
+        railShowOverview = v
+        sp.edit().putBoolean("rail_overview", v).apply()
+    }
+
+    /** 信息块的 5 行内容（存成逗号分隔的 id） */
+    var railInfoLines by mutableStateOf(
+        sp.getString("rail_info_lines", DEFAULT_RAIL_INFO_LINES) ?: DEFAULT_RAIL_INFO_LINES
+    )
+
+    /** 永远返回 5 个槽位，缺的补「不显示」 */
+    fun railInfoList(): List<InfoMetric> {
+        val parts = railInfoLines.split(",")
+        return (0 until INFO_LINE_COUNT).map { InfoMetric.of(parts.getOrNull(it)) }
+    }
+
+    fun updateRailInfoAt(index: Int, metric: InfoMetric) {
+        if (index !in 0 until INFO_LINE_COUNT) return
+        val list = railInfoList().toMutableList()
+        list[index] = metric
+        railInfoLines = list.joinToString(",") { it.id }
+        sp.edit().putString("rail_info_lines", railInfoLines).apply()
+    }
+
+    /** 允许用 su 去读 /sys 里那些直读拿不到的节点（只探测一次，不会反复弹授权） */
+    var useRoot by mutableStateOf(sp.getBoolean("use_root", true))
+
+    fun updateUseRoot(v: Boolean) {
+        useRoot = v
+        sp.edit().putBoolean("use_root", v).apply()
+        if (!v) lo.naui.sys.Metrics.resetRootCache()
     }
 }

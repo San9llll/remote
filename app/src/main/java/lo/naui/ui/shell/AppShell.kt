@@ -53,6 +53,7 @@ import lo.naui.ui.home.HomeScreen
 import lo.naui.ui.nav.Dest
 import lo.naui.ui.agent.AgentConfigScreen
 import lo.naui.ui.agent.AgentScreen
+import lo.naui.ui.agent.AgentSessionsScreen
 import lo.naui.ui.files.FileManagerScreen
 import lo.naui.ui.pages.ToolsScreen
 import lo.naui.ui.theme.CardStyle
@@ -73,7 +74,7 @@ private const val COMPACT_WIDTH_DP = 600f
 
 private val NAV_DESTS = listOf(Dest.Home, Dest.Modules, Dest.Overview, Dest.Settings)
 
-private enum class Sub { None, Theme, About, Files, AgentConfig }
+private enum class Sub { None, Theme, About, Files, AgentConfig, AgentSessions }
 
 /**
  * 外壳 —— 结构对齐参考项目（Aster 的 AsterAppShell）：
@@ -160,6 +161,7 @@ fun AppShell(prefs: ThemePrefs) {
                 )
                 Dest.Overview -> AgentScreen(
                     onOpenConfig = { sub = Sub.AgentConfig },
+                    onOpenSessions = { sub = Sub.AgentSessions },
                 )
                 Dest.Settings -> SettingsScreen(
                     prefs = prefs,
@@ -171,6 +173,7 @@ fun AppShell(prefs: ThemePrefs) {
             Sub.About -> AboutScreen(onBack = { sub = Sub.None })
             Sub.Files -> FileManagerScreen(onBack = { sub = Sub.None })
             Sub.AgentConfig -> AgentConfigScreen(onBack = { sub = Sub.None })
+            Sub.AgentSessions -> AgentSessionsScreen(onBack = { sub = Sub.None })
         }
     }
 

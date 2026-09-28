@@ -17,6 +17,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import lo.naui.agent.AgentStore
+import lo.naui.agent.PROVIDERS
+import lo.naui.ui.common.Option
+import lo.naui.ui.common.OptionDialog
 import lo.naui.ui.common.PageHeader
 import lo.naui.ui.common.SectionTitle
 import top.yukonga.miuix.kmp.basic.Card
@@ -24,10 +27,11 @@ import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.preference.SliderPreference
 
 /**
- * Agent 的配置。跟主题分开存，改完当页生效。
+ * Agent 的配置 —— Agent 页右上角「配置」进来的就是这一页。
  *
- * 只要是对 OpenAI 兼容的接口（DeepSeek / OpenAI / 中转站都算），
- * 填对 Base URL + Key + 模型名就能跑。
+ * 跟主题分开存，改完当页生效。
+ * 服务商那一栏是照着 AstrBot 加提供商的习惯做的：选一家 → Base URL 和默认模型自动填好，
+ * 剩下的 Key 自己贴。所有家都是 OpenAI 兼容的，所以换个 base 就能换模型。
  */
 @Composable
 fun AgentConfigScreen(onBack: () -> Unit = {}) {
@@ -35,6 +39,9 @@ fun AgentConfigScreen(onBack: () -> Unit = {}) {
     AgentStore.init(ctx)
 
     var tempDraft by remember { mutableStateOf(AgentStore.temperature) }
+    var pickProvider by remember { mutableStateOf(false) }
+
+    val current = PROVIDERS.firstOrNull { it.id == AgentStore.providerId }
 
     fun edit(title: String, value: String, hint: String, onSave: (String) -> Unit) {
         val input = EditText(ctx).apply {
@@ -58,7 +65,24 @@ fun AgentConfigScreen(onBack: () -> Unit = {}) {
     ) {
         PageHeader(title = "Agent 配置", subtitle = "OpenAI 兼容接口", onBack = onBack)
 
-        SectionTitle("接口")
+        SectionTitle("服务商")
+        ConfigCard {
+            ArrowPreference(
+                title = "选一家",
+                summary = if (current != null && current.id != "custom") {
+                    current.label + " · 点一下换一家（会自动填 Base URL 和模型）"
+                } else {
+                    "自定义 · Base URL 和模型都自己填"
+                },
+                onClick = { pickProvider = true },
+            )
+            ArrowPreference(
+                title = "请求会发到",
+                summary = AgentStore.baseUrl + "  +  /chat/completions",
+            )
+        }
+
+        SectionTitle("凭据")
         ConfigCard {
             ArrowPreference(
                 title = "Base URL",
@@ -71,7 +95,8 @@ fun AgentConfigScreen(onBack: () -> Unit = {}) {
             )
             ArrowPreference(
                 title = "API Key",
-                summary = if (AgentStore.apiKey.isBlank()) "还没填" else "已填（" + AgentStore.apiKey.take(6) + "…）",
+                summary = if (AgentStore.apiKey.isBlank()) "还没填"
+                else "已填（" + AgentStore.apiKey.take(6) + "…）",
                 onClick = {
                     edit("API Key", AgentStore.apiKey, "sk-…") { AgentStore.updateApiKey(it) }
                 },
@@ -114,8 +139,12 @@ fun AgentConfigScreen(onBack: () -> Unit = {}) {
         ConfigCard {
             ArrowPreference(
                 title = "系统提示词",
-                summary = if (AgentStore.systemPrompt.isBlank()) "没写（直接用模型默认）"
-                else AgentStore.systemPrompt.take(40) + if (AgentStore.systemPrompt.length > 40) "…" else "",
+                summary = if (AgentStore.systemPrompt.isBlank()) {
+                    "没写（用模型默认）"
+                } else {
+                    AgentStore.systemPrompt.take(40) +
+                        if (AgentStore.systemPrompt.length > 40) "…" else ""
+                },
                 onClick = {
                     edit("系统提示词", AgentStore.systemPrompt, "你是一个…") {
                         AgentStore.updateSystemPrompt(it)
@@ -127,18 +156,35 @@ fun AgentConfigScreen(onBack: () -> Unit = {}) {
         SectionTitle("说明")
         ConfigCard {
             ArrowPreference(
-                title = "怎么接别的模型",
-                summary = "Base URL 填到 /v1 为止，路径里的 /chat/completions 会自己接上",
+                title = "Base URL 填到哪",
+                summary = "填到 /v1 为止就行，后面的 /chat/completions 会自己接上",
             )
             ArrowPreference(
                 title = "图片",
-                summary = "图片走 base64 塞进消息里，所以要选支持视觉的模型（如 deepseek-vl 之类）",
+                summary = "图片按 base64 塞进消息里，得选支持视觉的模型",
             )
             ArrowPreference(
                 title = "文件",
-                summary = "文本文件（256KB 以内）会读成文字拼在问题前面",
+                summary = "文本文件（256KB 以内）读成文字拼在问题前面",
+            )
+            ArrowPreference(
+                title = "对话存哪",
+                summary = "全在本机 files/conversations/ 下，一个会话一个文件",
             )
         }
+    }
+
+    if (pickProvider) {
+        OptionDialog(
+            show = true,
+            title = "服务商",
+            options = PROVIDERS.map { p ->
+                Option(p.id, p.label, if (p.note.isNotBlank()) p.note else p.baseUrl)
+            },
+            currentId = AgentStore.providerId,
+            onPick = { id -> PROVIDERS.firstOrNull { it.id == id }?.let { AgentStore.applyProvider(it) } },
+            onDismiss = { pickProvider = false },
+        )
     }
 }
 

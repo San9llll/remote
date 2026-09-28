@@ -7,11 +7,17 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** 一条消息。images 里放的是 data:image/...;base64,xxx */
+/**
+ * 一条消息。
+ *
+ * images 是发送时用的 data:image/...;base64,xxx；
+ * imageCount 是**落盘用**的 —— 存本地时只记几张，不存 base64。
+ */
 data class ChatMessage(
     val role: String,
     val text: String,
     val images: List<String> = emptyList(),
+    val imageCount: Int = images.size,
 )
 
 /** 附件：图片走 base64 塞进 content，文本文件直接拼到正文前面 */
@@ -92,6 +98,7 @@ object AgentApi {
             messages.put(JSONObject().put("role", "system").put("content", AgentStore.systemPrompt))
         }
         history.forEach { m ->
+            // 历史里从本地读回来的消息没有 base64，只有 imageCount，那部分图就不重发了
             val content: Any = if (m.images.isEmpty()) {
                 m.text
             } else {

@@ -46,9 +46,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import lo.naui.agent.AgentApi
 import lo.naui.agent.AgentStore
 import lo.naui.agent.ChatAttachment
+import lo.naui.agent.ChatDb
 import lo.naui.agent.ChatMessage
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -60,12 +63,17 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
  * 只要填对 Base URL 和模型名就能用。Key、模型那些在「配置」里。
  */
 @Composable
-fun AgentScreen(onOpenConfig: () -> Unit) {
+fun AgentScreen(
+    onOpenConfig: () -> Unit,
+    onOpenSessions: () -> Unit,
+) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     AgentStore.init(ctx)
+    ChatDb.init(ctx)
 
     var messages by remember { mutableStateOf<List<ChatMessage>>(emptyList()) }
+    var convTitle by remember { mutableStateOf("新对话") }
     var pending by remember { mutableStateOf<List<ChatAttachment>>(emptyList()) }
     var draft by remember { mutableStateOf("") }
     var sending by remember { mutableStateOf(false) }
@@ -87,6 +95,29 @@ fun AgentScreen(onOpenConfig: () -> Unit) {
                 if (a == null) error = "这个文件读不了（只收 256KB 以内的文本）" else pending = pending + a
             }
         }
+    }
+
+    // 第一次进来：挑最近那个会话；一个都没有就开个新的
+    LaunchedEffect(Unit) {
+        if (AgentStore.activeConvId == null) {
+            val latest = withContext(Dispatchers.IO) { ChatDb.list().firstOrNull()?.id }
+            AgentStore.openConv(latest ?: ChatDb.newId())
+        }
+    }
+
+    // 换会话 → 把本地的读出来
+    LaunchedEffect(AgentStore.activeConvId) {
+        val id = AgentStore.activeConvId ?: return@LaunchedEffect
+        messages = withContext(Dispatchers.IO) { ChatDb.load(id) }
+        convTitle = ChatDb.titleOf(messages)
+    }
+
+    // 对话一变就落盘（标题取第一条用户消息）
+    LaunchedEffect(messages, AgentStore.activeConvId) {
+        val id = AgentStore.activeConvId ?: return@LaunchedEffect
+        if (messages.isEmpty()) return@LaunchedEffect
+        convTitle = ChatDb.titleOf(messages)
+        withContext(Dispatchers.IO) { ChatDb.save(id, convTitle, messages) }
     }
 
     LaunchedEffect(messages.size) {
@@ -135,12 +166,20 @@ fun AgentScreen(onOpenConfig: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
-                Text("Agent", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                Text(convTitle, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
                 Text(
                     if (AgentStore.ready) AgentStore.model else "还没配 API Key",
                     fontSize = 12.sp,
                     color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                 )
+            }
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(50))
+                    .clickable { onOpenSessions() }
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+            ) {
+                Text("会话", fontSize = 13.sp, color = MiuixTheme.colorScheme.primary)
             }
             Box(
                 Modifier

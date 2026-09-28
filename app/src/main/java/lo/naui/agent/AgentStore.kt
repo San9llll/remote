@@ -73,6 +73,51 @@ object AgentStore {
         sp?.edit()?.putInt("max_tokens", maxTokens)?.apply()
     }
 
+    /** 当前打开的是哪个会话（null = 还没挑，进去自己挑最近一个或者新建） */
+    var activeConvId by mutableStateOf<String?>(null)
+        private set
+
+    fun openConv(id: String) {
+        activeConvId = id
+    }
+
+    /** 开一个新会话（只是个新 id，真正落盘在第一次发消息时） */
+    fun beginNewConv() {
+        activeConvId = lo.naui.agent.ChatDb.newId()
+    }
+
+    /** 当前选中的服务商 id */
+    var providerId by mutableStateOf("deepseek")
+        private set
+
+    fun applyProvider(p: Provider) {
+        providerId = p.id
+        sp?.edit()?.putString("provider", p.id)?.apply()
+        if (p.baseUrl.isNotBlank()) updateBaseUrl(p.baseUrl)
+        if (p.model.isNotBlank()) updateModel(p.model)
+    }
+
     /** 填没填 key —— 没填就没法发 */
     val ready: Boolean get() = apiKey.isNotBlank() && baseUrl.isNotBlank()
 }
+
+/** 一个服务商预设：选它就把 Base URL 和默认模型填上，跟 AstrBot 里加提供商一个意思 */
+data class Provider(
+    val id: String,
+    val label: String,
+    val baseUrl: String,
+    val model: String,
+    val note: String = "",
+)
+
+/** 都是 OpenAI 兼容的，所以换个 base 就能换家 */
+val PROVIDERS: List<Provider> = listOf(
+    Provider("deepseek", "DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat", "官方直连"),
+    Provider("openai", "OpenAI", "https://api.openai.com/v1", "gpt-4o-mini", "官方直连"),
+    Provider("moonshot", "Kimi（月之暗面）", "https://api.moonshot.cn/v1", "moonshot-v1-8k"),
+    Provider("zhipu", "智谱 GLM", "https://open.bigmodel.cn/api/paas/v4", "glm-4-flash"),
+    Provider("dashscope", "通义千问", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus"),
+    Provider("siliconflow", "SiliconFlow", "https://api.siliconflow.cn/v1", "Qwen/Qwen2.5-7B-Instruct"),
+    Provider("ollama", "Ollama（本地）", "http://127.0.0.1:11434/v1", "llama3.1", "跑在本机或局域网"),
+    Provider("custom", "自定义", "", "", "自己填 Base URL 和模型"),
+)

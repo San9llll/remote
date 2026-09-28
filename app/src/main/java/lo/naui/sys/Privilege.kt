@@ -101,7 +101,7 @@ object Privilege {
     suspend fun exec(ctx: Context, cmd: String): String? = withContext(Dispatchers.IO) {
         when (level(ctx)) {
             PrivLevel.Root -> rootExec(cmd)
-            PrivLevel.Shizuku -> shizukuExec(cmd) ?: rootExec(cmd)
+            PrivLevel.Shizuku -> shizukuExec(cmd)
             PrivLevel.Normal -> null
         }
     }
@@ -117,9 +117,24 @@ object Privilege {
         }
     }.getOrNull()
 
-    /** Shizuku：走的也是 shell，只是这个 shell 是 adb 起的，不用 root */
+    /**
+     * 用 Shizuku 起一个 shell。
+     *
+     * 不能直接写 `Shizuku.newProcess` —— 13.1.5 里它是 **private** 的，
+     * 写上去编译直接红（CI 就是这么红的）。所以反射去摸
+     * `rikka.shizuku.Shell.newProcess(...)`，摸不到就老实返回 null，
+     * 让上层退到下一级权限，不硬撑着。
+     */
     private fun shizukuExec(cmd: String): String? = runCatching {
-        val process = Shizuku.newProcess(arrayOf("sh", "-c", cmd), null, null)
+        val shell = Class.forName("rikka.shizuku.Shell")
+        val method = shell.getMethod(
+            "newProcess",
+            Array<String>::class.java,
+            Array<String>::class.java,
+            String::class.java,
+        )
+        val process = method.invoke(null, arrayOf("sh", "-c", cmd), null, null) as? Process
+            ?: return@runCatching null
         val out = process.inputStream.bufferedReader().readText()
         process.waitFor(EXEC_TIMEOUT_MS, TimeUnit.MILLISECONDS)
         process.destroy()

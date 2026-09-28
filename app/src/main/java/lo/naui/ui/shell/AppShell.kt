@@ -108,16 +108,19 @@ fun AppShell(prefs: ThemePrefs) {
     var pageBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
 
     LaunchedEffect(prefs.homeImage) {
+        // 取色要的是 android.graphics.Bitmap，所以原图先留着，画的时候再转 ImageBitmap
         val bmp = loadBitmap(prefs.homeImage)
-        wallpaper = bmp
         if (bmp != null) {
+            wallpaper = bmp.asImageBitmap()
             val (seed, isLight) = lo.naui.ui.theme.dominantSeed(bmp)
             prefs.saveWallpaperSeed(seed, isLight)
+        } else {
+            wallpaper = null
         }
     }
 
     LaunchedEffect(prefs.contentImage) {
-        pageBitmap = loadBitmap(prefs.contentImage)
+        pageBitmap = loadBitmap(prefs.contentImage)?.asImageBitmap()
     }
 
     // 返回键先回上一级，别一按就退出 App
@@ -300,12 +303,10 @@ fun AppShell(prefs: ThemePrefs) {
     }
 }
 
-/** 本地图片路径 → ImageBitmap（读不到就 null，交给兜底渐变） */
-private fun loadBitmap(path: String): ImageBitmap? {
+/** 本地图片路径 → Bitmap（读不到就 null，交给兜底渐变） */
+private fun loadBitmap(path: String): android.graphics.Bitmap? {
     if (path.isBlank()) return null
     val f = java.io.File(path)
     if (!f.exists()) return null
-    return runCatching {
-        android.graphics.BitmapFactory.decodeFile(path)?.asImageBitmap()
-    }.getOrNull()
+    return runCatching { android.graphics.BitmapFactory.decodeFile(path) }.getOrNull()
 }

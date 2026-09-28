@@ -27,10 +27,11 @@ import top.yukonga.miuix.kmp.preference.ArrowPreference
 /**
  * 侧栏设置（主题 →「导航与外壳」里进来）。
  *
- * 三块：
+ * 两块：
  *  ① 侧栏模块 —— 电量 / 信息 / 概览入口 显示不显示
  *  ② 信息内容 —— 信息块那 5 行分别放什么
- *  ③ 读取方式 —— 要不要允许用 su 去读直读拿不到的节点
+ *
+ * root 不在这里，它是全局的：真需要读受限节点时自己会用，不给开关。
  */
 @Composable
 fun RailSettingsScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
@@ -79,15 +80,6 @@ fun RailSettingsScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
             }
         }
 
-        SectionTitle("读取方式")
-        RailCard {
-            IndicatorSwitchPreference(
-                checked = prefs.useRoot,
-                onCheckedChange = { prefs.updateUseRoot(it) },
-                title = "允许使用 su",
-                summary = "有些节点直读拿不到（GPU 占用率最常见），开着才会用 su 去读；只探测一次，不会反复弹授权框",
-            )
-        }
     }
 
     if (editing >= 0) {

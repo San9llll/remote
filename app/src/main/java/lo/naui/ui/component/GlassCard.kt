@@ -31,9 +31,6 @@ import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.drawBackdrop
 import com.kyant.backdrop.effects.blur
 import com.kyant.backdrop.effects.lens
-import com.kyant.backdrop.effects.vibrancy
-import com.kyant.backdrop.highlight.Highlight
-import com.kyant.backdrop.shadow.Shadow
 import lo.naui.ui.theme.CardStyle
 import lo.naui.ui.theme.LocalThemeModeState
 import lo.naui.ui.theme.Prefs
@@ -76,17 +73,19 @@ fun GlassCard(
         Box(
             modifier = modifier
                 .clip(shape)
+                // 官方用法：layerBackdrop 标背景 / drawBackdrop 画玻璃，两者不互相套。
+                // 这里只做两件事 —— blur 把背景糊掉，lens 出那道折射。
                 .drawBackdrop(
                     backdrop = bd,
                     shape = { shape },
                     effects = {
-                        blur(6f.dp.toPx())
-                        vibrancy()
-                        lens(24f.dp.toPx(), 24f.dp.toPx())
+                        blur(20f.dp.toPx())
+                        lens(12f.dp.toPx(), 16f.dp.toPx(), true)
                     },
-                    highlight = { Highlight.Default },
-                    shadow = { Shadow.Default },
-                    onDrawSurface = { drawRect(fill) },
+                    onDrawSurface = {
+                        // 一层半透明的面板色，保证卡片上的字读得清
+                        drawRect(fill)
+                    },
                 ),
         ) {
             // 卡片自己的背景图（可选）

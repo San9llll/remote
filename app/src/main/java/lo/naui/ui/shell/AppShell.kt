@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
+import lo.naui.ui.home.HomeSceneBackdrop
 import lo.naui.ui.home.HomeSceneRail
 import lo.naui.ui.home.HomeScreen
 import lo.naui.ui.nav.Dest
@@ -179,7 +180,48 @@ fun AppShell(prefs: ThemePrefs) {
         contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom),
     ) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
-            Column(Modifier.fillMaxSize().layerBackdrop(backdrop)) {
+            // ① 背景层 —— 这一层才是 backdrop 的「源」：
+            //    整页壁纸 + 内容页底图都记在这里。
+            //    ⚠️ 卡片绝不能待在这一层里面（那样就成了"背景画内容、内容又画背景"的
+            //       无限递归，渲染线程直接 SIGSEGV）。它只能在**外面**用 drawBackdrop 采样。
+            //    口诀：layerBackdrop 标背景，drawBackdrop 画玻璃，两者不可互相套。
+            Box(Modifier.fillMaxSize().layerBackdrop(backdrop)) {
+                if (panorama) {
+                    HomeSceneBackdrop(
+                        wallpaper = wallpaper,
+                        railWidth = if (showSceneRail) sceneRailWidth else 0.dp,
+                    )
+                } else {
+                    Box(Modifier.fillMaxSize().background(MiuixTheme.colorScheme.surface))
+                }
+
+                // 内容页底图：只铺在「功能 / 概览 / 设置」这几页，主页和侧边栏不受影响
+                val showPageBg = sub == Sub.None && current != Dest.Home && pageBitmap != null
+                if (showPageBg) {
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .padding(start = if (showSceneRail) sceneRailWidth else 0.dp),
+                    ) {
+                        Image(
+                            bitmap = pageBitmap!!,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                        Box(
+                            Modifier.fillMaxSize().background(
+                                MiuixTheme.colorScheme.surface.copy(
+                                    alpha = if (prefs.darkMode == lo.naui.ui.theme.DarkMode.Dark) 0.72f else 0.55f
+                                )
+                            )
+                        )
+                    }
+                }
+            }
+
+            // ② 内容层：卡片在这里面，用 drawBackdrop 去采样上面那层
+            Column(Modifier.fillMaxSize()) {
                 Row(Modifier.weight(1f).fillMaxWidth()) {
                     if (standardRail) {
                         NavigationRail {
@@ -200,25 +242,6 @@ fun AppShell(prefs: ThemePrefs) {
                             // 场景导轨浮在壁纸上，内容要给它让出位置
                             .padding(start = if (showSceneRail) sceneRailWidth else 0.dp),
                     ) {
-                        // 页面背景图：只铺在「模块 / 概览 / 设置」这几页，
-                        // 主页和侧边栏有自己的那套，不受影响
-                        val showPageBg = sub == Sub.None && current != Dest.Home && pageBitmap != null
-                        if (showPageBg) {
-                            Image(
-                                bitmap = pageBitmap!!,
-                                contentDescription = null,
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.fillMaxSize(),
-                            )
-                            Box(
-                                Modifier.fillMaxSize().background(
-                                    MiuixTheme.colorScheme.surface.copy(
-                                        alpha = if (prefs.darkMode == lo.naui.ui.theme.DarkMode.Dark) 0.72f else 0.55f
-                                    )
-                                )
-                            )
-                        }
-
                         // 页面切换动画：切 tab 当一张长图上下滚，进子页从卡片左下角放大展开
                         AnimatedContent(
                             // 必须给尺寸：不给的话子项里的滚动容器

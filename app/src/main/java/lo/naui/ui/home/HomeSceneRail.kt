@@ -69,7 +69,6 @@ import lo.naui.ui.nav.Dest
 import lo.naui.ui.theme.ClockStyle
 import lo.naui.ui.theme.InfoMetric
 import lo.naui.ui.theme.LocalThemeModeState
-import lo.naui.ui.theme.Prefs
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -112,16 +111,15 @@ fun HomeSceneRail(
 ) {
     val isDark = LocalThemeModeState.current.isDark
     val context = LocalContext.current
-    val useRoot = Prefs.current?.useRoot ?: true
 
     // 信息块要的那几个数：进来之后每 2 秒采一次
     var snapshot by remember { mutableStateOf(MetricsSnapshot()) }
     val activeLines = remember(infoLines) { infoLines.filter { it != InfoMetric.None } }
 
-    LaunchedEffect(showInfo, activeLines, useRoot) {
+    LaunchedEffect(showInfo, activeLines) {
         if (!showInfo || activeLines.isEmpty()) return@LaunchedEffect
         while (true) {
-            snapshot = Metrics.sample(context, useRoot)
+            snapshot = Metrics.sample(context)
             delay(2000)
         }
     }

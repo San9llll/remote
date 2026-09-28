@@ -329,13 +329,4 @@ class ThemePrefs(context: Context) {
         railInfoLines = list.joinToString(",") { it.id }
         sp.edit().putString("rail_info_lines", railInfoLines).apply()
     }
-
-    /** 允许用 su 去读 /sys 里那些直读拿不到的节点（只探测一次，不会反复弹授权） */
-    var useRoot by mutableStateOf(sp.getBoolean("use_root", true))
-
-    fun updateUseRoot(v: Boolean) {
-        useRoot = v
-        sp.edit().putBoolean("use_root", v).apply()
-        if (!v) lo.naui.sys.Metrics.resetRootCache()
-    }
 }

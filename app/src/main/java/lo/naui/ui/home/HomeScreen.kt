@@ -31,12 +31,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
 import lo.naui.sys.Metrics
 import lo.naui.sys.RootInfo
+import lo.naui.sys.ShizukuInfo
+import lo.naui.sys.ShizukuState
 import lo.naui.ui.component.GlassCard
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -48,8 +52,8 @@ import java.time.LocalTime
  * 整页模糊壁纸 + 左侧场景导轨（时钟 / 电量 / 信息都在导轨上），
  * 中间是壁纸 hero 卡（底部渐变淡出）、问候，然后一张卡：
  *
- *   上面一行是**拿到的 root 是什么、什么版本**
- *   下面接着是设备 / 系统那条状态条
+ *   上面两行是**这台机器能拿到什么权限** —— root（su）和 Shizuku（adb）各一行，
+ *   下面接着是设备 / 系统那条状态条。
  *
  * 底图（整页壁纸）是外壳画在背景层里的，这一页只管内容 ——
  * 卡片要采样的是那一层，所以卡片不能再被标成 backdrop 的源（不然就递归了）。
@@ -60,10 +64,21 @@ fun HomeScreen(
     wallpaper: ImageBitmap? = null,
     backdrop: com.kyant.backdrop.Backdrop? = null,
 ) {
+    val context = LocalContext.current
+
     var root by remember { mutableStateOf(RootInfo()) }
+    var shizuku by remember { mutableStateOf(ShizukuInfo()) }
+
     LaunchedEffect(Unit) {
         // 内部有缓存，整个 App 生命周期只会去问一次 su
         root = Metrics.rootInfo()
+    }
+    LaunchedEffect(Unit) {
+        // Shizuku 的服务随时可能启停，隔一会儿看一眼
+        while (true) {
+            shizuku = ShizukuState.info(context, force = true)
+            delay(5000)
+        }
     }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -105,7 +120,7 @@ fun HomeScreen(
                     .padding(top = 18.dp),
             )
 
-            // root + 设备/系统 合成一张卡
+            // 权限（root / Shizuku）+ 设备/系统 合成一张卡
             GlassCard(
                 backdrop = backdrop,
                 modifier = Modifier
@@ -114,7 +129,25 @@ fun HomeScreen(
                 contentPadding = 18.dp,
             ) {
                 Column(Modifier.fillMaxWidth()) {
-                    RootRow(root)
+                    PermRow(
+                        active = root.granted,
+                        title = if (root.version.isBlank()) root.name else root.name + " " + root.version,
+                        subtitle = root.detail,
+                        tag = if (root.granted) "ROOT" else "无 ROOT",
+                    )
+
+                    Spacer(Modifier.height(12.dp))
+
+                    PermRow(
+                        active = shizuku.running,
+                        title = if (shizuku.appVersion.isBlank()) {
+                            "Shizuku"
+                        } else {
+                            "Shizuku " + shizuku.appVersion
+                        },
+                        subtitle = shizukuSubtitle(shizuku),
+                        tag = shizuku.tag,
+                    )
 
                     Spacer(Modifier.height(14.dp))
                     Box(
@@ -139,9 +172,21 @@ fun HomeScreen(
     }
 }
 
-/** 一行：小圆点 + 「root 方式 + 版本」 + 副标题 + 右边一个 ROOT 标记 */
+private fun shizukuSubtitle(s: ShizukuInfo): String = when {
+    !s.installed -> "装一个可以用 adb 免 root 拿到一部分系统能力"
+    s.running && s.granted -> "服务在跑 · API " + s.serverVersion + " · 本应用已授权"
+    s.running -> "服务在跑，还没授权本应用"
+    else -> "装了，但服务没在跑"
+}
+
+/** 一行权限：小圆点 + 名字版本 + 说明 + 右边一个状态标记 */
 @Composable
-private fun RootRow(root: RootInfo) {
+private fun PermRow(
+    active: Boolean,
+    title: String,
+    subtitle: String,
+    tag: String,
+) {
     val accent = MiuixTheme.colorScheme.primary
     val muted = MiuixTheme.colorScheme.onSurfaceVariantSummary
 
@@ -150,23 +195,19 @@ private fun RootRow(root: RootInfo) {
             Modifier
                 .size(8.dp)
                 .clip(CircleShape)
-                .background(if (root.granted) accent else muted.copy(alpha = 0.45f))
+                .background(if (active) accent else muted.copy(alpha = 0.45f))
         )
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
-            Text(
-                if (root.version.isBlank()) root.name else root.name + " " + root.version,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
+            Text(title, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(2.dp))
-            Text(root.detail, fontSize = 12.sp, color = muted)
+            Text(subtitle, fontSize = 12.sp, color = muted)
         }
         Text(
-            if (root.granted) "ROOT" else "无 ROOT",
+            tag,
             fontSize = 11.sp,
             fontWeight = FontWeight.SemiBold,
-            color = if (root.granted) accent else muted,
+            color = if (active) accent else muted,
         )
     }
 }

@@ -11,8 +11,8 @@ android {
         applicationId = "lo.naui"
         minSdk = 26
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.3.0"
+        versionCode = 4
+        versionName = "0.4.0"
 
         // 只打 arm64-v8a。
         // 一来机器就是 arm64，多带别的 ABI 纯属白占体积；
@@ -72,6 +72,9 @@ dependencies {
     implementation(libs.miuix.icons)
     implementation(libs.miuix.preference)
     implementation(libs.backdrop)
+    // Shizuku：给没 root、但有 adb 的人用（识别 + 之后拿系统能力）
+    implementation(libs.shizuku.api)
+    implementation(libs.shizuku.provider)
     implementation(libs.capsule)
 
     implementation(libs.kotlinx.coroutines.android)

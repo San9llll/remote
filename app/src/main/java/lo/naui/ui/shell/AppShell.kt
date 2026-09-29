@@ -108,26 +108,6 @@ fun AppShell(prefs: ThemePrefs) {
     val panorama = prefs.globalLayout == GlobalLayout.Panorama
 
     // 全景模式下**所有页面**都走左侧导轨（不再切到底部胶囊），导航位置始终一致
-    // 内容页底图只在「功能 / 概览 / 设置」这几页铺，主页和侧边栏不受影响
-    val showPageBg = sub == Sub.None && current != Dest.Home && pageBitmap != null
-    val isDarkTheme = prefs.darkMode == lo.naui.ui.theme.DarkMode.Dark
-
-    // 当前这个子页算不算「功能区里的页面」—— 决定音量组合键是加还是摘
-    val currentFeature: Pair<String, String>? = when (sub) {
-        Sub.Files -> "files" to "文件管理"
-        else -> null
-    }
-
-    // 音量上 + 音量下 同时按：在功能子页里 = 钉到侧栏 / 摘下来
-    DisposableEffect(currentFeature) {
-        val listener: () -> Unit = {
-            val f = currentFeature
-            if (f != null) Shortcuts.toggle(f.first, f.second)
-        }
-        VolumeChordBus.addListener(listener)
-        onDispose { VolumeChordBus.removeListener(listener) }
-    }
-
     // Agent 那个入口可以在「主题 → 导航与外壳 → 侧栏设置」里关掉
     val railDests = if (prefs.railShowOverview) NAV_DESTS else NAV_DESTS.filter { it != Dest.Overview }
 
@@ -167,6 +147,26 @@ fun AppShell(prefs: ThemePrefs) {
     }
 
     val backdrop = rememberLayerBackdrop()
+
+    // 内容页底图只在「功能 / 概览 / 设置」这几页铺，主页和侧边栏不受影响
+    val showPageBg = sub == Sub.None && current != Dest.Home && pageBitmap != null
+    val isDarkTheme = prefs.darkMode == lo.naui.ui.theme.DarkMode.Dark
+
+    // 当前这个子页算不算「功能区里的页面」—— 决定音量组合键是加还是摘
+    val currentFeature: Pair<String, String>? = when (sub) {
+        Sub.Files -> "files" to "文件管理"
+        else -> null
+    }
+
+    // 音量上 + 音量下 同时按：在功能子页里 = 钉到侧栏 / 摘下来
+    DisposableEffect(currentFeature) {
+        val listener: () -> Unit = {
+            val f = currentFeature
+            if (f != null) Shortcuts.toggle(f.first, f.second)
+        }
+        VolumeChordBus.addListener(listener)
+        onDispose { VolumeChordBus.removeListener(listener) }
+    }
 
     // 按给定状态渲染页面（供 AnimatedContent 用 targetState 调用）
     val pageFor: @Composable (Dest, Sub) -> Unit = { dest, subState ->

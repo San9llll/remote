@@ -38,10 +38,11 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
  * 这样外观那一行改完，后面所有页面当场生效。
  */
 object SwitchIndicator {
-    val enabled: Boolean get() = Prefs.current?.switchIndicator ?: true
+    /** 强制打开，主题页里那个「开关」分区已经删了 */
+    val enabled: Boolean get() = true
 
     fun update(value: Boolean) {
-        Prefs.current?.updateSwitchIndicator(value)
+        // 强制打开，没得改；留着这个签名免得别处调用报错
     }
 }
 

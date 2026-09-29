@@ -167,7 +167,11 @@ class ThemePrefs(context: Context) {
     var useCustomSeed by mutableStateOf(sp.getBoolean("useCustom", false))
 
     var homeLayout by mutableStateOf(HomeLayout.of(sp.getString("home_layout", null)))
-    var globalLayout by mutableStateOf(GlobalLayout.of(sp.getString("global_layout", null)))
+    /**
+     * 全局布局 —— **强制全景**（大图 + 侧边栏）。
+     * 主题页里「全局布局」那个入口已经删了。
+     */
+    val globalLayout: GlobalLayout get() = GlobalLayout.Panorama
     var navMode by mutableStateOf(NavMode.of(sp.getString("nav_mode", null)))
     var clockStyle by mutableStateOf(ClockStyle.of(sp.getString("clock_style", null)))
     var density by mutableStateOf(Density.of(sp.getString("density", null)))
@@ -210,7 +214,6 @@ class ThemePrefs(context: Context) {
         sp.edit().putInt("seed", customSeed).putBoolean("useCustom", true).apply()
     }
     fun updateHomeLayout(v: HomeLayout) { homeLayout = v; sp.edit().putString("home_layout", v.id).apply() }
-    fun updateGlobalLayout(v: GlobalLayout) { globalLayout = v; sp.edit().putString("global_layout", v.id).apply() }
     fun updateNavMode(v: NavMode) { navMode = v; sp.edit().putString("nav_mode", v.id).apply() }
     fun updateClockStyle(v: ClockStyle) { clockStyle = v; sp.edit().putString("clock_style", v.id).apply() }
     fun updateDensity(v: Density) { density = v; sp.edit().putString("density", v.id).apply() }
@@ -228,13 +231,11 @@ class ThemePrefs(context: Context) {
     /** 当前生效的 dpi（0 = 跟随系统） */
     val effectiveDpi: Int get() = if (customDpi > 0) customDpi else density.dpi
 
-    /** 开关拇指里要不要放状态图标（对齐 Aster 的「开关指示器」） */
-    var switchIndicator by mutableStateOf(sp.getBoolean("switch_indicator", true))
-
-    fun updateSwitchIndicator(v: Boolean) {
-        switchIndicator = v
-        sp.edit().putBoolean("switch_indicator", v).apply()
-    }
+    /**
+     * 开关拇指里的状态图标 —— **强制打开**。
+     * 主题页里那个「开关」分区已经删了，不再给改的入口。
+     */
+    val switchIndicator: Boolean get() = true
 
     /** 跟随壁纸取色（全景首页那张照片的颜色当种子） */
     var followWallpaper by mutableStateOf(WallpaperColorTheme.enabled)

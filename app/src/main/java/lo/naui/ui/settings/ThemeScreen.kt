@@ -1,5 +1,11 @@
 package lo.naui.ui.settings
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -223,57 +229,52 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
                         startAction = { SettingsIcon(MiuixIcons.Layers) },
                         onClick = { dialog = "cardstyle" },
                     )
-                }
-            }
 
-            item(key = "glass") {
-                SectionTitle("玻璃参数")
-                SettingsCard {
-                    ArrowPreference(
-                        title = "当前方案",
-                        summary = if (prefs.cardStyle == CardStyle.Liquid) {
-                            "液态玻璃 · 下面这几个数当场生效"
-                        } else {
-                            "仿玻璃 · 想调折射就先切到液态玻璃（模糊和圆角两种方案都吃）"
-                        },
-                        onClick = { dialog = "cardstyle" },
-                    )
-                    SliderPreference(
-                        value = prefs.glassBlur,
-                        onValueChange = { prefs.updateGlassBlur(it) },
-                        title = "模糊",
-                        summary = "背景透过玻璃被糊掉的程度",
-                        valueText = prefs.glassBlur.toInt().toString() + " dp",
-                        valueRange = 0f..40f,
-                        steps = 7,
-                    )
-                    SliderPreference(
-                        value = prefs.glassLens,
-                        onValueChange = { prefs.updateGlassLens(it) },
-                        title = "折射深度",
-                        summary = "边缘那道液态折射的强度（只对液态玻璃有效）",
-                        valueText = prefs.glassLens.toInt().toString() + " dp",
-                        valueRange = 0f..40f,
-                        steps = 7,
-                    )
-                    SliderPreference(
-                        value = prefs.glassAlpha,
-                        onValueChange = { prefs.updateGlassAlpha(it) },
-                        title = "面板不透明度",
-                        summary = "越小越透，越大字越清楚",
-                        valueText = String.format("%.2f", prefs.glassAlpha),
-                        valueRange = 0.10f..0.95f,
-                        steps = 16,
-                    )
-                    SliderPreference(
-                        value = prefs.glassRadius.toFloat(),
-                        onValueChange = { prefs.updateGlassRadius(it.toInt()) },
-                        title = "卡片圆角",
-                        summary = "所有玻璃卡共用这个圆角",
-                        valueText = prefs.glassRadius.toString() + " dp",
-                        valueRange = 0f..36f,
-                        steps = 11,
-                    )
+                    // 选了液态玻璃，下面这几个旋钮才展开
+                    AnimatedVisibility(
+                        visible = prefs.cardStyle == CardStyle.Liquid,
+                        enter = expandVertically(tween(320)) + fadeIn(tween(240)),
+                        exit = shrinkVertically(tween(260)) + fadeOut(tween(160)),
+                    ) {
+                        Column(Modifier.fillMaxWidth()) {
+                            SliderPreference(
+                                value = prefs.glassBlur,
+                                onValueChange = { prefs.updateGlassBlur(it) },
+                                title = "模糊",
+                                summary = "背景透过玻璃被糊掉的程度",
+                                valueText = prefs.glassBlur.toInt().toString() + " dp",
+                                valueRange = 0f..40f,
+                                steps = 7,
+                            )
+                            SliderPreference(
+                                value = prefs.glassLens,
+                                onValueChange = { prefs.updateGlassLens(it) },
+                                title = "折射深度",
+                                summary = "边缘那道液态折射的强度",
+                                valueText = prefs.glassLens.toInt().toString() + " dp",
+                                valueRange = 0f..40f,
+                                steps = 7,
+                            )
+                            SliderPreference(
+                                value = prefs.glassAlpha,
+                                onValueChange = { prefs.updateGlassAlpha(it) },
+                                title = "面板不透明度",
+                                summary = "越小越透，越大字越清楚",
+                                valueText = String.format("%.2f", prefs.glassAlpha),
+                                valueRange = 0.10f..0.95f,
+                                steps = 16,
+                            )
+                            SliderPreference(
+                                value = prefs.glassRadius.toFloat(),
+                                onValueChange = { prefs.updateGlassRadius(it.toInt()) },
+                                title = "卡片圆角",
+                                summary = "所有玻璃卡共用这个圆角",
+                                valueText = prefs.glassRadius.toString() + " dp",
+                                valueRange = 0f..36f,
+                                steps = 11,
+                            )
+                        }
+                    }
                 }
             }
 
@@ -337,12 +338,6 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
             item(key = "shell") {
                 SectionTitle("导航与外壳")
                 SettingsCard {
-                    ArrowPreference(
-                        title = "全局布局",
-                        summary = prefs.globalLayout.summary,
-                        startAction = { SettingsIcon(MiuixIcons.ScreenMirroring) },
-                        onClick = { dialog = "global" },
-                    )
                     ArrowPreference(
                         title = "首页布局",
                         summary = prefs.homeLayout.summary,
@@ -413,48 +408,6 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
                         )
                     }
 
-                    ArrowPreference(
-                        title = "页面背景",
-                        summary = if (prefs.pageImage.isBlank()) {
-                            "还没选 · 会用在「功能 / Agent / 设置」三页"
-                        } else {
-                            "已设置 · 用在「功能 / Agent / 设置」三页"
-                        },
-                        startAction = { SettingsIcon(MiuixIcons.Photos) },
-                        onClick = { pagePicker.launch("image/*") },
-                    )
-                    if (prefs.pageImage.isNotBlank()) {
-                        ArrowPreference(
-                            title = "清除页面背景",
-                            summary = "回到纯主题底色",
-                            onClick = { prefs.updatePageImage("") },
-                        )
-                    }
-
-                    ArrowPreference(
-                        title = "说明",
-                        summary = "主页大图会糊一层做背景；玻璃卡折射的是它没糊的那份",
-                    )
-                }
-            }
-
-            item(key = "switches") {
-                SectionTitle("开关")
-                SettingsCard {
-                    IndicatorSwitchPreference(
-                        checked = prefs.switchIndicator,
-                        onCheckedChange = { prefs.updateSwitchIndicator(it) },
-                        title = "开关图标",
-                        summary = "在开关的拇指里显示 Ok / Close",
-                    )
-                    IndicatorSwitchPreference(
-                        checked = prefs.globalLayout == GlobalLayout.Panorama,
-                        onCheckedChange = {
-                            prefs.updateGlobalLayout(if (it) GlobalLayout.Panorama else GlobalLayout.Standard)
-                        },
-                        title = "全景首页",
-                        summary = "首页用壁纸场景 + 左侧场景导轨",
-                    )
                 }
             }
         }
@@ -486,13 +439,6 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
             options = DarkMode.entries.map { Option(it.id, it.label, it.summary) },
             currentId = prefs.darkMode.id,
             onPick = { id -> DarkMode.entries.firstOrNull { it.id == id }?.let { prefs.updateDarkMode(it) } },
-            onDismiss = { dialog = null },
-        )
-        "global" -> OptionDialog(
-            show = true, title = "全局布局",
-            options = GlobalLayout.entries.map { Option(it.id, it.label, it.summary) },
-            currentId = prefs.globalLayout.id,
-            onPick = { id -> GlobalLayout.entries.firstOrNull { it.id == id }?.let { prefs.updateGlobalLayout(it) } },
             onDismiss = { dialog = null },
         )
         "home" -> OptionDialog(

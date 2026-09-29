@@ -6,7 +6,6 @@ import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import lo.naui.sys.Shortcuts
@@ -67,14 +66,8 @@ class MainActivity : ComponentActivity() {
             }
             Shortcuts.init(context)
             NakourTheme(p) {
-                // 先走开屏，加载完再进主界面
-                // 不用 by 委托 —— 省得还要 import getValue/setValue
-                val booted = remember { mutableStateOf(false) }
-                if (!booted.value) {
-                    lo.naui.ui.splash.SplashScreen(onDone = { booted.value = true })
-                } else {
-                    AppShell(p)
-                }
+                // 不要开屏了，直接进主界面
+                AppShell(p)
             }
         }
     }

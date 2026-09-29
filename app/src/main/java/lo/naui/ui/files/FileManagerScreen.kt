@@ -7,7 +7,10 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
 import android.provider.DocumentsContract
+import android.provider.Settings
 import android.widget.EditText
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -408,6 +411,27 @@ fun FileManagerScreen(
                 contentPadding = 14.dp,
             ) {
                 Column(Modifier.fillMaxWidth()) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable {
+                                menuOpen = false
+                                openAllFilesAccess(ctx)
+                            }
+                            .padding(vertical = 10.dp, horizontal = 6.dp),
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("所有文件访问权限", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                            Text(
+                                if (hasAllFilesAccess()) "已开启"
+                                else "没开的话 /Android/data 这类地方看不了",
+                                fontSize = 11.sp,
+                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            )
+                        }
+                    }
+
                     Row(
                         Modifier
                             .fillMaxWidth()
@@ -1031,4 +1055,31 @@ private fun querySaf(ctx: Context, treeUri: String, parentDocId: String): List<F
         }
     }
     return out.sortedWith(compareByDescending<FsEntry> { it.isDir }.thenBy { it.name.lowercase() })
+}
+
+/** Android 11+ 的「所有文件访问权限」开没开 */
+private fun hasAllFilesAccess(): Boolean =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        runCatching { Environment.isExternalStorageManager() }.getOrDefault(false)
+    } else {
+        true
+    }
+
+/** 跳到系统那个「所有文件访问权限」开关（老系统就跳应用详情页） */
+private fun openAllFilesAccess(ctx: Context) {
+    runCatching {
+        val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Intent(
+                Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                Uri.parse("package:" + ctx.packageName),
+            )
+        } else {
+            Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:" + ctx.packageName),
+            )
+        }
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        ctx.startActivity(intent)
+    }
 }

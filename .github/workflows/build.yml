@@ -62,7 +62,9 @@ jobs:
       - name: Collect APK
         run: |
           mkdir -p out
-          cp app/build/outputs/apk/release/*.apk out/nakour.apk
+          VERSION=$(grep -m1 'versionName = ' app/build.gradle.kts | sed 's/.*"\(.*\)".*/\1/')
+          echo "版本号: $VERSION"
+          cp app/build/outputs/apk/release/*.apk "out/nakour-${VERSION}.apk"
           ls -la out
 
       - name: Upload artifact
@@ -77,5 +79,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: out/*.apk
-          name: Nakour ${{ github.ref_name }}
+          name: Nakour ${{ github.ref_name }}  (${{ github.sha }})
           generate_release_notes: true

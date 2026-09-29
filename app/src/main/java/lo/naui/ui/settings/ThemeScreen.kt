@@ -226,6 +226,57 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
                 }
             }
 
+            item(key = "glass") {
+                SectionTitle("玻璃参数")
+                SettingsCard {
+                    ArrowPreference(
+                        title = "当前方案",
+                        summary = if (prefs.cardStyle == CardStyle.Liquid) {
+                            "液态玻璃 · 下面这几个数当场生效"
+                        } else {
+                            "仿玻璃 · 想调折射就先切到液态玻璃（模糊和圆角两种方案都吃）"
+                        },
+                        onClick = { dialog = "cardstyle" },
+                    )
+                    SliderPreference(
+                        value = prefs.glassBlur,
+                        onValueChange = { prefs.updateGlassBlur(it) },
+                        title = "模糊",
+                        summary = "背景透过玻璃被糊掉的程度",
+                        valueText = prefs.glassBlur.toInt().toString() + " dp",
+                        valueRange = 0f..40f,
+                        steps = 7,
+                    )
+                    SliderPreference(
+                        value = prefs.glassLens,
+                        onValueChange = { prefs.updateGlassLens(it) },
+                        title = "折射深度",
+                        summary = "边缘那道液态折射的强度（只对液态玻璃有效）",
+                        valueText = prefs.glassLens.toInt().toString() + " dp",
+                        valueRange = 0f..40f,
+                        steps = 7,
+                    )
+                    SliderPreference(
+                        value = prefs.glassAlpha,
+                        onValueChange = { prefs.updateGlassAlpha(it) },
+                        title = "面板不透明度",
+                        summary = "越小越透，越大字越清楚",
+                        valueText = String.format("%.2f", prefs.glassAlpha),
+                        valueRange = 0.10f..0.95f,
+                        steps = 16,
+                    )
+                    SliderPreference(
+                        value = prefs.glassRadius.toFloat(),
+                        onValueChange = { prefs.updateGlassRadius(it.toInt()) },
+                        title = "卡片圆角",
+                        summary = "所有玻璃卡共用这个圆角",
+                        valueText = prefs.glassRadius.toString() + " dp",
+                        valueRange = 0f..36f,
+                        steps = 11,
+                    )
+                }
+            }
+
             item(key = "presets") {
                 SectionTitle("基准色（" + PresetColors.list.size + " 种）")
                 Card(
@@ -323,57 +374,51 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
                 }
             }
 
-            item(key = "homeimage") {
-                SectionTitle("主页大图")
+            item(key = "background") {
+                SectionTitle("背景")
                 SettingsCard {
                     ArrowPreference(
-                        title = "选择图片",
-                        summary = if (prefs.homeImage.isBlank()) "还没选（用主题渐变兜底）" else "已设置 · 点一下换一张",
+                        title = "主页大图",
+                        summary = if (prefs.homeImage.isBlank()) {
+                            "还没选（用主题渐变兜底）"
+                        } else {
+                            "已设置 · 点一下换一张"
+                        },
                         startAction = { SettingsIcon(MiuixIcons.Photos) },
                         onClick = { imagePicker.launch("image/*") },
                     )
                     if (prefs.homeImage.isNotBlank()) {
                         ArrowPreference(
-                            title = "恢复默认",
+                            title = "清除主页大图",
                             summary = "回到主题渐变兜底",
                             onClick = { prefs.updateHomeImage("") },
                         )
                     }
-                }
-            }
 
-            item(key = "contentimage") {
-                SectionTitle("内容页背景")
-                SettingsCard {
                     ArrowPreference(
-                        title = "选择图片",
-                        summary = if (prefs.contentImage.isBlank()) "还没选（用主题底色）" else "已设置 · 点一下换一张",
+                        title = "内容页背景",
+                        summary = if (prefs.contentImage.isBlank()) {
+                            "还没选（用主题底色）"
+                        } else {
+                            "已设置 · 点一下换一张"
+                        },
                         startAction = { SettingsIcon(MiuixIcons.Photos) },
                         onClick = { contentPicker.launch("image/*") },
                     )
-                    ArrowPreference(
-                        title = "说明",
-                        summary = "只铺在模块 / 概览 / 设置这些页面，不影响主页大图和侧边栏",
-                    )
                     if (prefs.contentImage.isNotBlank()) {
                         ArrowPreference(
-                            title = "恢复默认",
+                            title = "清除内容页背景",
                             summary = "回到主题底色",
                             onClick = { prefs.updateContentImage("") },
                         )
                     }
-                }
-            }
 
-            item(key = "pageimage") {
-                SectionTitle("页面背景")
-                SettingsCard {
                     ArrowPreference(
-                        title = "选择图片",
+                        title = "页面背景",
                         summary = if (prefs.pageImage.isBlank()) {
-                            "还没选 · 会用在「模块 / 概览 / 设置」三页"
+                            "还没选 · 会用在「功能 / Agent / 设置」三页"
                         } else {
-                            "已设置 · 用在「模块 / 概览 / 设置」三页"
+                            "已设置 · 用在「功能 / Agent / 设置」三页"
                         },
                         startAction = { SettingsIcon(MiuixIcons.Photos) },
                         onClick = { pagePicker.launch("image/*") },
@@ -385,9 +430,13 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
                             onClick = { prefs.updatePageImage("") },
                         )
                     }
+
+                    ArrowPreference(
+                        title = "说明",
+                        summary = "主页大图会糊一层做背景；玻璃卡折射的是它没糊的那份",
+                    )
                 }
             }
-
 
             item(key = "switches") {
                 SectionTitle("开关")

@@ -311,6 +311,40 @@ class ThemePrefs(context: Context) {
         sp.edit().putBoolean("rail_overview", v).apply()
     }
 
+    /* ---------- 玻璃参数（液态玻璃那几个旋钮）---------- */
+
+    /** 模糊半径，dp */
+    var glassBlur by mutableStateOf(sp.getFloat("glass_blur", 20f))
+
+    fun updateGlassBlur(v: Float) {
+        glassBlur = v.coerceIn(0f, 40f)
+        sp.edit().putFloat("glass_blur", glassBlur).apply()
+    }
+
+    /** 折射深度（lens），dp */
+    var glassLens by mutableStateOf(sp.getFloat("glass_lens", 12f))
+
+    fun updateGlassLens(v: Float) {
+        glassLens = v.coerceIn(0f, 40f)
+        sp.edit().putFloat("glass_lens", glassLens).apply()
+    }
+
+    /** 卡片面板色的不透明度 */
+    var glassAlpha by mutableStateOf(sp.getFloat("glass_alpha", 0.58f))
+
+    fun updateGlassAlpha(v: Float) {
+        glassAlpha = v.coerceIn(0.10f, 0.95f)
+        sp.edit().putFloat("glass_alpha", glassAlpha).apply()
+    }
+
+    /** 卡片圆角，dp */
+    var glassRadius by mutableStateOf(sp.getInt("glass_radius", 20))
+
+    fun updateGlassRadius(v: Int) {
+        glassRadius = v.coerceIn(0, 36)
+        sp.edit().putInt("glass_radius", glassRadius).apply()
+    }
+
     /** 信息块的 5 行内容（存成逗号分隔的 id） */
     var railInfoLines by mutableStateOf(
         sp.getString("rail_info_lines", DEFAULT_RAIL_INFO_LINES) ?: DEFAULT_RAIL_INFO_LINES

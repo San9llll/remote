@@ -1,26 +1,40 @@
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+
 package lo.naui.ui.files
 
+import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.DocumentsContract
+import android.widget.EditText
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -32,9 +46,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
@@ -42,12 +58,13 @@ import lo.naui.sys.FileStore
 import lo.naui.sys.FsEntry
 import lo.naui.sys.PrivLevel
 import lo.naui.sys.Privilege
-import lo.naui.ui.common.PageHeader
-import lo.naui.ui.common.SectionTitle
-import top.yukonga.miuix.kmp.basic.Card
+import lo.naui.ui.component.GlassCard
+import lo.naui.ui.component.glassShape
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+
+/** 进来默认看这里 */
+const val DEFAULT_DIR = "/storage/emulated/0/"
 
 private const val SAF_PREFIX = "saf|"
 
@@ -78,23 +95,30 @@ fun readableSize(b: Long): String = when {
 /**
  * 文件管理。
  *
- * 列表按**当前能拿到的最高权限**去读：有 root 就走 su，只有 Shizuku 就走它，
- * 什么都没有就退回 java.io.File（只能看自己有权看的目录）。
- * 想看 `/` 这种地方，得先有 root 或者 Shizuku。
+ * 顶部**没有返回键也没有标题**：左边是「⋮」，点开是「加目录 + 已添加的目录」；
+ * 右边一块液态玻璃卡显示当前在哪。列表是左右两排，每张卡都是玻璃卡。
  *
- * 另外可以自己加外部存储目录（SAF），加进来的是持久授权，重启也在。
+ * 返回键 / 从左往右划 → 退上一级；已经到 `/` 了再退才回功能页。
+ *
+ * 列表按当前最高权限去读：root 走 su，Shizuku 走它的 shell，都没有就 java.io.File。
  */
 @Composable
-fun FileManagerScreen(onBack: () -> Unit) {
+fun FileManagerScreen(
+    onBack: () -> Unit,
+    backdrop: com.kyant.backdrop.Backdrop? = null,
+) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
+    val cardShape = glassShape()
     FileStore.init(ctx)
 
-    var path by remember { mutableStateOf("/") }
+    var path by remember { mutableStateOf(DEFAULT_DIR) }
     var entries by remember { mutableStateOf<List<FsEntry>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
     var level by remember { mutableStateOf(PrivLevel.Normal) }
     var note by remember { mutableStateOf<String?>(null) }
+    var menuOpen by remember { mutableStateOf(false) }
+    var remarkTarget by remember { mutableStateOf<String?>(null) }
 
     val treePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
@@ -128,120 +152,280 @@ fun FileManagerScreen(onBack: () -> Unit) {
         }
     }
 
-    LaunchedEffect(Unit) { load("/") }
+    fun goUp() {
+        val saf = parseSaf(path)
+        if (saf != null) {
+            runCatching {
+                load(safKey(saf.first, DocumentsContract.getTreeDocumentId(Uri.parse(saf.first))))
+            }
+            return
+        }
+        if (path.isBlank() || path == "/") {
+            onBack()
+        } else {
+            load(parentOf(path))
+        }
+    }
 
-    Column(Modifier.fillMaxSize()) {
-        PageHeader(
-            title = "文件管理",
-            subtitle = level.label + " · " + path,
-            action = "加目录",
-            onAction = { treePicker.launch(null) },
-            onBack = onBack,
-        )
+    LaunchedEffect(Unit) { load(DEFAULT_DIR) }
 
-        // 外部存储快捷入口
-        if (FileStore.safDirs.isNotEmpty()) {
+    // 返回键：先退目录，退到 / 才退出这一页
+    BackHandler(enabled = true) { goUp() }
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            // 从左往右划 = 返回上一级
+            .pointerInput(path) {
+                var total = 0f
+                detectHorizontalDragGestures(
+                    onDragStart = { total = 0f },
+                    onDragEnd = { if (total > 140f) goUp() },
+                    onHorizontalDrag = { _, drag -> total += drag },
+                )
+            },
+    ) {
+        Column(Modifier.fillMaxSize()) {
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 14.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    .windowInsetsPadding(WindowInsets.statusBars)
+                    .padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                FileStore.safDirs.forEach { uri ->
-                    val on = path.startsWith(SAF_PREFIX + uri)
-                    Box(
-                        Modifier
-                            .clip(RoundedCornerShape(50))
-                            .background(
-                                if (on) MiuixTheme.colorScheme.primary.copy(alpha = 0.16f)
-                                else MiuixTheme.colorScheme.surfaceContainerHigh
-                            )
-                            .clickable {
-                                runCatching {
-                                    val tree = Uri.parse(uri)
-                                    load(safKey(uri, DocumentsContract.getTreeDocumentId(tree)))
-                                }
-                            }
-                            .padding(horizontal = 14.dp, vertical = 7.dp),
-                    ) {
+                // 三个点
+                Box(
+                    Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .clickable { menuOpen = !menuOpen },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        "⋮",
+                        fontSize = 20.sp,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    )
+                }
+
+                Spacer(Modifier.weight(1f))
+
+                // 当前目录 —— 顶在最右边的液态玻璃卡
+                GlassCard(
+                    backdrop = backdrop,
+                    modifier = Modifier.widthIn(max = 220.dp),
+                    contentPadding = 12.dp,
+                ) {
+                    Column(horizontalAlignment = Alignment.End) {
                         Text(
-                            FileStore.label(uri),
+                            path.ifBlank { "/" },
                             fontSize = 12.5.sp,
-                            color = if (on) MiuixTheme.colorScheme.primary
-                            else MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            level.label + " · " + entries.size + " 项" +
+                                if (loading) " · 读取中…" else "",
+                            fontSize = 11.sp,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            maxLines = 1,
                         )
                     }
                 }
             }
-        }
 
-        Box(Modifier.weight(1f).fillMaxWidth()) {
-            LazyColumn(
-                Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = 28.dp),
+            note?.let {
+                Text(
+                    it,
+                    fontSize = 11.5.sp,
+                    color = MiuixTheme.colorScheme.error,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
+
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(2),
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 28.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                if (parseSaf(path) == null && path != "/") {
-                    item(key = "__up__") {
-                        RowCard {
-                            ArrowPreference(
-                                title = "..",
-                                summary = "回到 " + parentOf(path),
-                                onClick = { load(parentOf(path)) },
-                            )
-                        }
-                    }
-                }
-
                 if (entries.isEmpty() && !loading) {
                     item(key = "__empty__") {
-                        RowCard {
-                            ArrowPreference(
-                                title = "这里是空的",
-                                summary = note ?: "没有条目，或者这个权限读不到",
-                            )
+                        GlassCard(
+                            backdrop = backdrop,
+                            modifier = Modifier.fillMaxWidth(),
+                            contentPadding = 14.dp,
+                        ) {
+                            Column {
+                                Text("这里是空的", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                                Text(
+                                    "没条目，或者这个权限读不到",
+                                    fontSize = 11.5.sp,
+                                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                )
+                            }
                         }
                     }
                 }
 
                 items(entries, key = { it.path }) { e ->
-                    RowCard {
-                        ArrowPreference(
-                            title = (if (e.isDir) "📁 " else "📄 ") + e.name,
-                            summary = if (e.isDir) "目录" else readableSize(e.size),
-                            onClick = {
+                    GlassCard(
+                        backdrop = backdrop,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(cardShape)
+                            .clickable {
                                 if (e.isDir) {
                                     load(e.path)
                                 } else {
                                     note = e.name + " · " + readableSize(e.size)
                                 }
                             },
-                        )
+                        contentPadding = 14.dp,
+                    ) {
+                        Column {
+                            Text(
+                                e.name,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                if (e.isDir) "目录" else readableSize(e.size),
+                                fontSize = 11.sp,
+                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            )
+                        }
                     }
                 }
             }
         }
 
-        if (loading) {
-            Text(
-                "读取中…",
-                fontSize = 12.sp,
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                modifier = Modifier.padding(start = 18.dp, bottom = 12.dp),
+        // ---- 三点菜单 ----
+        if (menuOpen) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.30f))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) { menuOpen = false }
             )
+
+            GlassCard(
+                backdrop = backdrop,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(start = 14.dp, top = 56.dp)
+                    .widthIn(max = 320.dp),
+                contentPadding = 14.dp,
+            ) {
+                Column(Modifier.fillMaxWidth()) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable {
+                                menuOpen = false
+                                treePicker.launch(null)
+                            }
+                            .padding(vertical = 10.dp, horizontal = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("加目录", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    }
+
+                    if (FileStore.safDirs.isNotEmpty()) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "已添加（长按可改备注 / 删除）",
+                            fontSize = 11.sp,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            modifier = Modifier.padding(start = 6.dp, bottom = 4.dp),
+                        )
+                        FileStore.safDirs.forEach { uri ->
+                            val remark = FileStore.remarkOf(uri)
+                            Column(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .combinedClickable(
+                                        onClick = {
+                                            menuOpen = false
+                                            runCatching {
+                                                load(
+                                                    safKey(
+                                                        uri,
+                                                        DocumentsContract.getTreeDocumentId(Uri.parse(uri)),
+                                                    )
+                                                )
+                                            }
+                                        },
+                                        onLongClick = { remarkTarget = uri },
+                                    )
+                                    .padding(vertical = 9.dp, horizontal = 6.dp),
+                            ) {
+                                Text(
+                                    remark.ifBlank { FileStore.label(uri) },
+                                    fontSize = 13.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                if (remark.isNotBlank()) {
+                                    Text(
+                                        FileStore.label(uri),
+                                        fontSize = 11.sp,
+                                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
-}
 
-@Composable
-private fun RowCard(content: @Composable () -> Unit) {
-    Card(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp)
-            .padding(bottom = 6.dp),
-    ) {
-        Column { content() }
+    // 长按某个已添加目录 → 改备注 / 删掉
+    val target = remarkTarget
+    if (target != null) {
+        AlertDialog.Builder(ctx)
+            .setTitle(FileStore.remarkOf(target).ifBlank { FileStore.label(target) })
+            .setItems(arrayOf("设置备注", "删除这个目录")) { _, which ->
+                if (which == 0) {
+                    val input = EditText(ctx).apply {
+                        setText(FileStore.remarkOf(target))
+                        setSelection(FileStore.remarkOf(target).length)
+                        hint = "给这个目录起个名"
+                    }
+                    AlertDialog.Builder(ctx)
+                        .setTitle("备注")
+                        .setView(input)
+                        .setPositiveButton("保存") { _, _ ->
+                            FileStore.setRemark(target, input.text.toString())
+                        }
+                        .setNegativeButton("取消", null)
+                        .show()
+                } else {
+                    FileStore.removeSafDir(target)
+                    runCatching {
+                        ctx.contentResolver.releasePersistableUriPermission(
+                            Uri.parse(target),
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                        )
+                    }
+                }
+                remarkTarget = null
+            }
+            .setNegativeButton("取消") { _, _ -> remarkTarget = null }
+            .show()
     }
 }
 

@@ -21,6 +21,10 @@ object FileStore {
         safDirs = (p.getString("saf_dirs", "") ?: "")
             .split("\n")
             .filter { it.isNotBlank() }
+        remarks = runCatching {
+            val o = org.json.JSONObject(p.getString("saf_remarks", "{}") ?: "{}")
+            o.keys().asSequence().associateWith { o.optString(it, "") }
+        }.getOrDefault(emptyMap())
     }
 
     fun addSafDir(uri: String) {
@@ -32,6 +36,26 @@ object FileStore {
     fun removeSafDir(uri: String) {
         safDirs = safDirs.filter { it != uri }
         sp?.edit()?.putString("saf_dirs", safDirs.joinToString("\n"))?.apply()
+    }
+
+    var remarks by mutableStateOf<Map<String, String>>(emptyMap())
+        private set
+
+    fun remarkOf(uri: String): String = remarks[uri].orEmpty()
+
+    fun setRemark(uri: String, text: String) {
+        val next = remarks.toMutableMap()
+        if (text.isBlank()) next.remove(uri) else next[uri] = text
+        remarks = next
+        persistRemarks()
+    }
+
+    private fun persistRemarks() {
+        runCatching {
+            val o = org.json.JSONObject()
+            remarks.forEach { (k, v) -> o.put(k, v) }
+            sp?.edit()?.putString("saf_remarks", o.toString())?.apply()
+        }
     }
 
     fun label(uri: String): String = runCatching {

@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -39,6 +40,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.draw.BlurredEdgeTreatment
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
@@ -47,6 +50,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
+import lo.naui.sys.Shortcuts
+import lo.naui.sys.VolumeChordBus
 import lo.naui.ui.home.HomeSceneBackdrop
 import lo.naui.ui.home.HomeSceneRail
 import lo.naui.ui.home.HomeScreen
@@ -103,8 +108,25 @@ fun AppShell(prefs: ThemePrefs) {
     val panorama = prefs.globalLayout == GlobalLayout.Panorama
 
     // 全景模式下**所有页面**都走左侧导轨（不再切到底部胶囊），导航位置始终一致
-    // 液态玻璃模式下，背景层要交出清晰图给 drawBackdrop 去糊
-    val liquidGlass = prefs.cardStyle == CardStyle.Liquid
+    // 内容页底图只在「功能 / 概览 / 设置」这几页铺，主页和侧边栏不受影响
+    val showPageBg = sub == Sub.None && current != Dest.Home && pageBitmap != null
+    val isDarkTheme = prefs.darkMode == lo.naui.ui.theme.DarkMode.Dark
+
+    // 当前这个子页算不算「功能区里的页面」—— 决定音量组合键是加还是摘
+    val currentFeature: Pair<String, String>? = when (sub) {
+        Sub.Files -> "files" to "文件管理"
+        else -> null
+    }
+
+    // 音量上 + 音量下 同时按：在功能子页里 = 钉到侧栏 / 摘下来
+    DisposableEffect(currentFeature) {
+        val listener: () -> Unit = {
+            val f = currentFeature
+            if (f != null) Shortcuts.toggle(f.first, f.second)
+        }
+        VolumeChordBus.addListener(listener)
+        onDispose { VolumeChordBus.removeListener(listener) }
+    }
 
     // Agent 那个入口可以在「主题 → 导航与外壳 → 侧栏设置」里关掉
     val railDests = if (prefs.railShowOverview) NAV_DESTS else NAV_DESTS.filter { it != Dest.Overview }
@@ -171,7 +193,7 @@ fun AppShell(prefs: ThemePrefs) {
             }
             Sub.Theme -> ThemeScreen(prefs, onBack = { sub = Sub.None })
             Sub.About -> AboutScreen(onBack = { sub = Sub.None })
-            Sub.Files -> FileManagerScreen(onBack = { sub = Sub.None })
+            Sub.Files -> FileManagerScreen(onBack = { sub = Sub.None }, backdrop = backdrop)
             Sub.AgentConfig -> AgentConfigScreen(onBack = { sub = Sub.None })
             Sub.AgentSessions -> AgentSessionsScreen(onBack = { sub = Sub.None })
         }
@@ -182,48 +204,30 @@ fun AppShell(prefs: ThemePrefs) {
         contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom),
     ) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
-            // ① 背景层 —— 这一层才是 backdrop 的「源」：
-            //    整页壁纸 + 内容页底图都记在这里。
-            //    ⚠️ 卡片绝不能待在这一层里面（那样就成了"背景画内容、内容又画背景"的
-            //       无限递归，渲染线程直接 SIGSEGV）。它只能在**外面**用 drawBackdrop 采样。
-            //    口诀：layerBackdrop 标背景，drawBackdrop 画玻璃，两者不可互相套。
+            // ① 素材层：清晰、不压黑 —— 玻璃卡 drawBackdrop 采样的就是这一层。
+            //    它会被 ② 完全盖住，肉眼看不见；但少了它玻璃卡就没东西可折射。
             Box(Modifier.fillMaxSize().layerBackdrop(backdrop)) {
-                if (panorama) {
-                    HomeSceneBackdrop(
-                        wallpaper = wallpaper,
-                        railWidth = if (showSceneRail) sceneRailWidth else 0.dp,
-                        // 液态玻璃模式下这层放清晰图 —— 模糊交给玻璃卡里的 blur 做。
-                        // 这层要是自己先糊一遍再压黑纱，玻璃卡折射出来就是一团黑。
-                        sharp = liquidGlass,
-                    )
-                } else {
-                    Box(Modifier.fillMaxSize().background(MiuixTheme.colorScheme.surface))
-                }
-
-                // 内容页底图：只铺在「功能 / 概览 / 设置」这几页，主页和侧边栏不受影响
-                val showPageBg = sub == Sub.None && current != Dest.Home && pageBitmap != null
-                if (showPageBg) {
-                    Box(
-                        Modifier
-                            .fillMaxSize()
-                            .padding(start = if (showSceneRail) sceneRailWidth else 0.dp),
-                    ) {
-                        Image(
-                            bitmap = pageBitmap!!,
-                            contentDescription = null,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize(),
-                        )
-                        Box(
-                            Modifier.fillMaxSize().background(
-                                MiuixTheme.colorScheme.surface.copy(
-                                    alpha = if (prefs.darkMode == lo.naui.ui.theme.DarkMode.Dark) 0.72f else 0.55f
-                                )
-                            )
-                        )
-                    }
-                }
+                AppBackdropLayer(
+                    panorama = panorama,
+                    wallpaper = wallpaper,
+                    railWidth = if (showSceneRail) sceneRailWidth else 0.dp,
+                    pageBitmap = pageBitmap,
+                    showPageBg = showPageBg,
+                    blurred = false,
+                    darkScrim = isDarkTheme,
+                )
             }
+
+            // ② 视觉层：糊 + 压黑，这才是你眼睛看到的那张背景
+            AppBackdropLayer(
+                panorama = panorama,
+                wallpaper = wallpaper,
+                railWidth = if (showSceneRail) sceneRailWidth else 0.dp,
+                pageBitmap = pageBitmap,
+                showPageBg = showPageBg,
+                blurred = true,
+                darkScrim = isDarkTheme,
+            )
 
             // ② 内容层：卡片在这里面，用 drawBackdrop 去采样上面那层
             Column(Modifier.fillMaxSize()) {
@@ -343,6 +347,12 @@ fun AppShell(prefs: ThemePrefs) {
                     showBattery = prefs.railShowBattery,
                     showInfo = prefs.railShowInfo,
                     infoLines = prefs.railInfoList(),
+                    shortcuts = Shortcuts.items,
+                    onShortcutClick = { key ->
+                        when (key) {
+                            "files" -> sub = Sub.Files
+                        }
+                    },
                     modifier = Modifier
                         .align(Alignment.TopStart)
                         .width(sceneRailWidth)
@@ -360,4 +370,61 @@ private fun loadBitmap(path: String): android.graphics.Bitmap? {
     val f = java.io.File(path)
     if (!f.exists()) return null
     return runCatching { android.graphics.BitmapFactory.decodeFile(path) }.getOrNull()
+}
+
+/**
+ * 背景的一层。同一个画面画两遍：
+ *  ① blurred = false → 素材层，给玻璃卡当折射素材
+ *  ② blurred = true  → 视觉层，糊 + 压黑
+ */
+@Composable
+private fun AppBackdropLayer(
+    panorama: Boolean,
+    wallpaper: ImageBitmap?,
+    railWidth: androidx.compose.ui.unit.Dp,
+    pageBitmap: ImageBitmap?,
+    showPageBg: Boolean,
+    blurred: Boolean,
+    darkScrim: Boolean,
+) {
+    Box(Modifier.fillMaxSize()) {
+        if (panorama) {
+            HomeSceneBackdrop(
+                wallpaper = wallpaper,
+                railWidth = railWidth,
+                blurred = blurred,
+                drawDecor = blurred,
+            )
+        } else {
+            Box(Modifier.fillMaxSize().background(MiuixTheme.colorScheme.surface))
+        }
+
+        if (showPageBg && pageBitmap != null) {
+            Box(Modifier.fillMaxSize().padding(start = railWidth)) {
+                Image(
+                    bitmap = pageBitmap,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .then(
+                            if (blurred) {
+                                Modifier.blur(26.dp, edgeTreatment = BlurredEdgeTreatment.Rectangle)
+                            } else {
+                                Modifier
+                            }
+                        ),
+                )
+                if (blurred) {
+                    Box(
+                        Modifier.fillMaxSize().background(
+                            MiuixTheme.colorScheme.surface.copy(
+                                alpha = if (darkScrim) 0.72f else 0.55f
+                            )
+                        )
+                    )
+                }
+            }
+        }
+    }
 }

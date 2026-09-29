@@ -5,7 +5,12 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
@@ -24,6 +29,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
@@ -31,6 +37,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -65,6 +73,7 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import lo.naui.sys.Metrics
 import lo.naui.sys.MetricsSnapshot
+import lo.naui.sys.Shortcut
 import lo.naui.ui.nav.Dest
 import lo.naui.ui.theme.ClockStyle
 import lo.naui.ui.theme.InfoMetric
@@ -107,6 +116,9 @@ fun HomeSceneRail(
     showBattery: Boolean = true,
     showInfo: Boolean = true,
     infoLines: List<InfoMetric> = emptyList(),
+    /** 功能快捷栏（默认空 = 隐藏） */
+    shortcuts: List<Shortcut> = emptyList(),
+    onShortcutClick: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val isDark = LocalThemeModeState.current.isDark
@@ -190,6 +202,36 @@ fun HomeSceneRail(
                     if (showInfo && activeLines.isNotEmpty()) {
                         Spacer(Modifier.height(14.dp))
                         RailInfoBlock(items = activeLines, snap = snapshot)
+                    }
+                }
+
+                Spacer(Modifier.weight(1f))
+
+                // 功能快捷栏：夹在信息块和导航项中间，自己独立上下滑
+                // 外面套一层有界高度的 Box —— 不定高度的话里面那个 LazyColumn
+                // 会拿到无限约束，直接抛 "infinity maximum height constraints"
+                AnimatedVisibility(
+                    visible = shortcuts.isNotEmpty(),
+                    enter = slideInHorizontally(tween(340)) { -it } + fadeIn(tween(260)),
+                    exit = slideOutHorizontally(tween(240)) { -it } + fadeOut(tween(160)),
+                ) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 240.dp)
+                            .padding(horizontal = 8.dp),
+                    ) {
+                        LazyColumn(
+                            Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            items(shortcuts, key = { it.key }) { sc ->
+                                RailShortcutBarItem(
+                                    title = sc.title,
+                                    onClick = { onShortcutClick(sc.key) },
+                                )
+                            }
+                        }
                     }
                 }
 
@@ -334,6 +376,31 @@ private fun zero(v: Float): String = v.roundToInt().toString()
 private fun one(v: Float): String = ((v * 10f).roundToInt() / 10f).toString()
 
 private fun two(v: Float): String = ((v * 100f).roundToInt() / 100f).toString()
+
+/* ---------------- 功能快捷栏 ---------------- */
+
+@Composable
+private fun RailShortcutBarItem(title: String, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(SceneOnWallpaper.copy(alpha = 0.16f))
+            .border(1.dp, SceneOnWallpaper.copy(alpha = 0.20f), RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 6.dp, vertical = 9.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            title,
+            fontSize = 10.sp,
+            color = SceneOnWallpaper.copy(alpha = 0.92f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+        )
+    }
+}
 
 /* ---------------- 导航项 ---------------- */
 

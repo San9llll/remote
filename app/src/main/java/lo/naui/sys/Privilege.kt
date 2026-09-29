@@ -44,6 +44,7 @@ object Privilege {
     private const val EXEC_TIMEOUT_MS = 4000L
 
     @Volatile private var cachedLevel: PrivLevel? = null
+    @Volatile private var levelAt = 0L
 
     fun resetCache() {
         cachedLevel = null
@@ -55,14 +56,25 @@ object Privilege {
             Shizuku.checkSelfPermission() == android.content.pm.PackageManager.PERMISSION_GRANTED
     }.getOrDefault(false)
 
+    /**
+     * 当前最高权限。
+     *
+     * 拿到 Root / Shizuku 就缓存住；**只拿到普通用户不缓存**（几秒后重算），
+     * 免得用户刚在 su 授权框上点完"允许"，这边还咬定自己是普通用户。
+     */
     suspend fun level(ctx: Context, force: Boolean = false): PrivLevel = withContext(Dispatchers.IO) {
-        if (!force) cachedLevel?.let { return@withContext it }
+        val c = cachedLevel
+        if (!force && c != null && c != PrivLevel.Normal) return@withContext c
+        if (!force && c == PrivLevel.Normal && System.currentTimeMillis() - levelAt < 5_000L) {
+            return@withContext PrivLevel.Normal
+        }
         val l = when {
             Metrics.rootAvailable() -> PrivLevel.Root
             shizukuReady() -> PrivLevel.Shizuku
             else -> PrivLevel.Normal
         }
         cachedLevel = l
+        levelAt = System.currentTimeMillis()
         l
     }
 
@@ -148,10 +160,43 @@ object Privilege {
         if (lv == PrivLevel.Normal) return@withContext plainList(path)
 
         val quoted = path.replace("'", "'\\''")
-        val out = exec(ctx, "ls -lA '$quoted' 2>/dev/null")
+        val out = exec(ctx, shellListCmd(quoted))
         if (out.isNullOrBlank()) return@withContext plainList(path)
-        val parsed = parseLs(out, path)
-        if (parsed.isEmpty()) plainList(path) else parsed
+        val parsed = parseListing(out, path)
+        if (parsed.isNotEmpty()) parsed else plainList(path)
+    }
+
+    /**
+     * 列目录用的 shell。
+     *
+     * 不用 `ls -l` —— 它的列数是**看系统**的（有的 8 列、有的带 SELinux context 变 9 列），
+     * 之前按 9 列去切，结果一行都没解析出来，用户看起来就像"root 没生效"。
+     * 这里自己拼 `d|大小|名字` 这种固定格式，跟系统无关。
+     */
+    private fun shellListCmd(quoted: String): String =
+        "cd '$quoted' 2>/dev/null && for f in * .[!.]* ..?*; do [ -e \"${'$'}f\" ] || continue; " +
+            "if [ -d \"${'$'}f\" ]; then echo \"d|0|${'$'}f\"; " +
+            "else echo \"f|\$(wc -c < \"${'$'}f\" 2>/dev/null || echo 0)|${'$'}f\"; fi; done"
+
+    /** 解析上面那种 `d|大小|名字`；名字里有 | 也不怕（limit = 3） */
+    private fun parseListing(out: String, base: String): List<FsEntry> {
+        val list = mutableListOf<FsEntry>()
+        out.lineSequence().forEach { line ->
+            val t = line.trim()
+            if (t.isEmpty()) return@forEach
+            val parts = t.split("|", limit = 3)
+            if (parts.size < 3) return@forEach
+            val name = parts[2]
+            if (name.isBlank() || name == "." || name == "..") return@forEach
+            val isDir = parts[0] == "d"
+            list += FsEntry(
+                name = name,
+                path = if (base.endsWith("/")) base + name else base + "/" + name,
+                isDir = isDir,
+                size = if (isDir) 0L else (parts[1].toLongOrNull() ?: 0L),
+            )
+        }
+        return list.sortedWith(compareByDescending<FsEntry> { it.isDir }.thenBy { it.name.lowercase() })
     }
 
     private fun plainList(path: String): List<FsEntry> {

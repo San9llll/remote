@@ -46,19 +46,36 @@ data class RootInfo(
  */
 object Metrics {
 
-    private const val SU_TIMEOUT_MS = 1500L
+    // 第一次调 su 会弹授权框，用户点"允许"得花几秒 —— 给够时间。
+    // 之前 1.5 秒就超时，超时被当成"没有 root"**永久缓存**，
+    // 于是用户明明授权了，App 还是当自己没有 root（文件管理连 /data 都进不去就是这个）。
+    private const val SU_TIMEOUT_MS = 6000L
+
+    // 失败的结果只记这么久，过一会儿再问一次
+    private const val ROOT_RETRY_MS = 15_000L
 
     /* ---------------- root ---------------- */
 
     @Volatile private var rootChecked = false
     @Volatile private var rootOk = false
+    @Volatile private var rootCheckedAt = 0L
 
+    /**
+     * 有没有 root。
+     *
+     * 成功过一次就永远算成功；**失败只记 15 秒**，过了再问一次 ——
+     * 这样用户在授权框上点完"允许"，最多十几秒就能用上，
+     * 不用杀进程重开。
+     */
     fun rootAvailable(): Boolean {
-        if (rootChecked) return rootOk
+        if (rootOk) return true
+        if (rootChecked && System.currentTimeMillis() - rootCheckedAt < ROOT_RETRY_MS) return false
         synchronized(this) {
-            if (rootChecked) return rootOk
+            if (rootOk) return true
+            if (rootChecked && System.currentTimeMillis() - rootCheckedAt < ROOT_RETRY_MS) return false
             rootOk = probeRoot()
             rootChecked = true
+            rootCheckedAt = System.currentTimeMillis()
             return rootOk
         }
     }

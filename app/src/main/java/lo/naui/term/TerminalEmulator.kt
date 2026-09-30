@@ -549,7 +549,7 @@ class TerminalEmulator(
                 v == 7 -> curFlags = curFlags or Attr.REVERSE
                 v == 8 -> curFlags = curFlags or Attr.HIDDEN
                 v == 9 -> curFlags = curFlags or Attr.STRIKE
-                v == 21, v == 22 -> curFlags = curFlags and Attr.BOLD.inv() and Attr.DIM.inv()
+                v == 21 || v == 22 -> curFlags = curFlags and Attr.BOLD.inv() and Attr.DIM.inv()
                 v == 23 -> curFlags = curFlags and Attr.ITALIC.inv()
                 v == 24 -> curFlags = curFlags and Attr.UNDERLINE.inv()
                 v == 25 -> curFlags = curFlags and Attr.BLINK.inv()

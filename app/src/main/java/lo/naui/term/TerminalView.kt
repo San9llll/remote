@@ -109,6 +109,7 @@ fun TerminalCanvas(
                     line.fg[end + 1] == fg && line.flags[end + 1] == fl
                 ) end++
 
+                val cellBg = line.bg[c]
                 val sb = StringBuilder(end - c + 1)
                 var blank = true
                 for (i in c..end) {
@@ -120,7 +121,7 @@ fun TerminalCanvas(
 
                 if (!blank) {
                     val flags = fl.toInt()
-                    var color = if (flags and Attr.HIDDEN != 0) bg else fg
+                    var color = if (flags and Attr.HIDDEN != 0) cellBg else fg
                     if (flags and Attr.DIM != 0) color = alphaOf(color, 0.6f)
 
                     if (flags and Attr.REVERSE != 0) {
@@ -129,7 +130,7 @@ fun TerminalCanvas(
                             topLeft = Offset(c * cellW, y),
                             size = Size((end - c + 1) * cellW, cellH),
                         )
-                        color = bg
+                        color = cellBg
                     }
 
                     drawText(

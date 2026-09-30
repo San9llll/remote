@@ -7,12 +7,22 @@ android {
     namespace = "lo.naui"
     compileSdk = 37
 
+    // 终端要真 PTY，只能靠 native 里的 forkpty
+    ndkVersion = "27.0.12077973"
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
+
     defaultConfig {
         applicationId = "lo.naui"
         minSdk = 26
         targetSdk = 36
-        versionCode = 10
-        versionName = "0.10.0"
+        versionCode = 11
+        versionName = "0.11.0"
 
         // 只打 arm64-v8a。
         // 一来机器就是 arm64，多带别的 ABI 纯属白占体积；
@@ -20,6 +30,13 @@ android {
         // 混进旧的其它 ABI 库最容易在启动时炸在这儿。
         ndk {
             abiFilters += listOf("arm64-v8a")
+        }
+
+        externalNativeBuild {
+            cmake {
+                // 只编 C，不需要 C++ 运行时
+                arguments += listOf("-DANDROID_STL=none")
+            }
         }
     }
 

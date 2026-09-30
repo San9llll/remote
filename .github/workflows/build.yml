@@ -34,6 +34,18 @@ jobs:
         with:
           gradle-version: '9.7.0'
 
+      - name: 装 NDK（终端要 forkpty）
+        run: |
+          SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          echo "SDK=$SDK"
+          SM=$(ls "$SDK"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1)
+          echo "sdkmanager=$SM"
+          if [ -n "$SM" ]; then
+            yes | "$SM" --licenses > /dev/null 2>&1 || true
+            "$SM" --install "ndk;27.0.12077973" > /dev/null 2>&1 || echo "NDK 安装失败，交给 Gradle 自己下"
+          fi
+          ls "$SDK/ndk" 2>/dev/null || true
+
       - name: Kotlin 编译检查（快速）
         run: gradle compileReleaseKotlin --no-daemon
 
@@ -54,6 +66,15 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.7.0'
+
+      - name: 装 NDK（终端要 forkpty）
+        run: |
+          SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          SM=$(ls "$SDK"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1)
+          if [ -n "$SM" ]; then
+            yes | "$SM" --licenses > /dev/null 2>&1 || true
+            "$SM" --install "ndk;27.0.12077973" > /dev/null 2>&1 || echo "NDK 安装失败，交给 Gradle 自己下"
+          fi
 
       # 只出 release 版（带日志的 debug 版不再推送）
       - name: Build release APK

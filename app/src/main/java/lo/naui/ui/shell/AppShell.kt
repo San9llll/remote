@@ -79,7 +79,7 @@ private const val COMPACT_WIDTH_DP = 600f
 
 private val NAV_DESTS = listOf(Dest.Home, Dest.Modules, Dest.Overview, Dest.Settings)
 
-private enum class Sub { None, Theme, About, Files, AgentConfig, AgentSessions }
+private enum class Sub { None, Theme, About, Files, Terminal, AgentConfig, AgentSessions }
 
 /**
  * 外壳 —— 结构对齐参考项目（Aster 的 AsterAppShell）：
@@ -155,6 +155,7 @@ fun AppShell(prefs: ThemePrefs) {
     // 当前这个子页算不算「功能区里的页面」—— 决定音量组合键是加还是摘
     val currentFeature: Pair<String, String>? = when (sub) {
         Sub.Files -> "files" to "文件管理"
+        Sub.Terminal -> "terminal" to "终端"
         else -> null
     }
 
@@ -179,6 +180,7 @@ fun AppShell(prefs: ThemePrefs) {
                 )
                 Dest.Modules -> ToolsScreen(
                     onOpenFiles = { sub = Sub.Files },
+                    onOpenTerminal = { sub = Sub.Terminal },
                     backdrop = backdrop,
                 )
                 Dest.Overview -> AgentScreen(
@@ -194,6 +196,7 @@ fun AppShell(prefs: ThemePrefs) {
             Sub.Theme -> ThemeScreen(prefs, onBack = { sub = Sub.None })
             Sub.About -> AboutScreen(onBack = { sub = Sub.None })
             Sub.Files -> FileManagerScreen(onBack = { sub = Sub.None }, backdrop = backdrop)
+            Sub.Terminal -> lo.naui.ui.terminal.TerminalScreen(onBack = { sub = Sub.None })
             Sub.AgentConfig -> AgentConfigScreen(onBack = { sub = Sub.None })
             Sub.AgentSessions -> AgentSessionsScreen(onBack = { sub = Sub.None })
         }
@@ -351,6 +354,7 @@ fun AppShell(prefs: ThemePrefs) {
                     onShortcutClick = { key ->
                         when (key) {
                             "files" -> sub = Sub.Files
+                            "terminal" -> sub = Sub.Terminal
                         }
                     },
                     modifier = Modifier

@@ -19,12 +19,14 @@ import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
- * 功能页：这一版先放了「文件管理」。
- * 以后要加别的小工具，往下面再摞一张 GlassCard 就行。
+ * 功能页。要加新工具就往下面再摞一张玻璃卡。
+ *
+ * 这些页都能用「音量上 + 音量下 同时按」钉到左边快捷栏。
  */
 @Composable
 fun ToolsScreen(
     onOpenFiles: () -> Unit,
+    onOpenTerminal: () -> Unit,
     backdrop: com.kyant.backdrop.Backdrop? = null,
 ) {
     Column(
@@ -37,7 +39,7 @@ fun ToolsScreen(
         Text("功能", fontSize = 26.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(4.dp))
         Text(
-            "能用最高权限去摸系统的地方",
+            "能用最高权限去摸系统的地方 · 进子页后按音量上+下可钉到侧栏",
             fontSize = 13.sp,
             color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
         )
@@ -51,8 +53,13 @@ fun ToolsScreen(
             Column(Modifier.fillMaxWidth()) {
                 ArrowPreference(
                     title = "文件管理",
-                    summary = "能一直往上翻到 / ，也可以自己加外部存储目录",
+                    summary = "双栏 · 能一直往上翻到 /，也可以自己加外部存储目录",
                     onClick = onOpenFiles,
+                )
+                ArrowPreference(
+                    title = "终端",
+                    summary = "按当前最高权限执行命令（root / Shizuku / 本地 sh）",
+                    onClick = onOpenTerminal,
                 )
             }
         }

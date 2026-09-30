@@ -32,11 +32,36 @@ data class UpdateInfo(
  */
 object UpdateChecker {
 
-    private const val API = "https://api.github.com/repos/San9llll/remote/releases/latest"
+    private const val API_PATH = "https://api.github.com/repos/San9llll/remote/releases/latest"
+
+    /**
+     * 直连 + 几个代理。实测：
+     *   api.github.com          跑在 github 的域名上，国内经常**DNS 都解析不了**
+     *                           （实机报：Unable to resolve host "api.github.com"）
+     *   gh-proxy.com            能代理 API（实测 200，能拿到 releases/latest 的 JSON）
+     *   另外两个只能代理文件下载，走 API 会 403，放着当备胎
+     */
+    private fun endpoints(): List<String> = listOf(
+        API_PATH,
+        "https://gh-proxy.com/$API_PATH",
+        "https://ghfast.top/$API_PATH",
+        "https://ghproxy.net/$API_PATH",
+    )
 
     suspend fun check(): Result<UpdateInfo> = withContext(Dispatchers.IO) {
         runCatching {
-            val conn = (URL(API).openConnection() as HttpURLConnection).apply {
+            var lastErr: Throwable? = null
+            for (api in endpoints()) {
+                val r = runCatching { fetchOne(api) }
+                if (r.isSuccess) return@runCatching r.getOrThrow()
+                lastErr = r.exceptionOrNull()
+            }
+            throw IllegalStateException(lastErr?.message ?: "所有更新源都连不上")
+        }
+    }
+
+    private fun fetchOne(api: String): UpdateInfo {
+        val conn = (URL(api).openConnection() as HttpURLConnection).apply {
                 connectTimeout = 15_000
                 readTimeout = 20_000
                 setRequestProperty("Accept", "application/vnd.github+json")
@@ -46,7 +71,11 @@ object UpdateChecker {
             val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
                 ?.bufferedReader()?.use { it.readText() }.orEmpty()
             conn.disconnect()
-            if (code !in 200..299) throw IllegalStateException("GitHub 返回 " + code)
+            if (code !in 200..299) {
+                throw IllegalStateException(
+                    api.substringAfter("//").substringBefore('/') + " 返回 " + code
+                )
+            }
 
             val json = JSONObject(body)
             val version = json.optString("tag_name", "").trim().removePrefix("v").removePrefix("V")
@@ -67,7 +96,6 @@ object UpdateChecker {
                 }
             }
             UpdateInfo(version, json.optString("body", ""), asset)
-        }
     }
 
     /** 版本号比大小：0.10.0 比 0.9.0 新 */
@@ -82,6 +110,14 @@ object UpdateChecker {
         return false
     }
 
+    /** 下载地址也备几个代理 —— 有些网络连 github.com 的 DNS 都解析不了 */
+    private fun assetUrls(asset: UpdateAsset): List<String> = listOf(
+        asset.url,
+        "https://gh-proxy.com/" + asset.url,
+        "https://ghfast.top/" + asset.url,
+        "https://ghproxy.net/" + asset.url,
+    )
+
     /** 下到 filesDir/update/ 下，边下边回报进度 */
     suspend fun download(
         ctx: Context,
@@ -93,7 +129,24 @@ object UpdateChecker {
             val out = File(dir, asset.name)
             if (out.exists() && out.length() == asset.size && asset.size > 0) return@runCatching out
 
-            val conn = (URL(asset.url).openConnection() as HttpURLConnection).apply {
+            var lastErr: Throwable? = null
+            for (u in assetUrls(asset)) {
+                val r = runCatching { downloadFrom(u, out, asset, onProgress) }
+                if (r.isSuccess) return@runCatching out
+                lastErr = r.exceptionOrNull()
+                runCatching { out.delete() }
+            }
+            throw IllegalStateException(lastErr?.message ?: "下载失败")
+        }
+    }
+
+    private fun downloadFrom(
+        url: String,
+        out: File,
+        asset: UpdateAsset,
+        onProgress: (Float) -> Unit,
+    ) {
+            val conn = (URL(url).openConnection() as HttpURLConnection).apply {
                 connectTimeout = 15_000
                 readTimeout = 30_000
                 instanceFollowRedirects = true
@@ -119,9 +172,10 @@ object UpdateChecker {
                 }
             }
             conn.disconnect()
+            if (asset.size > 0 && out.length() < asset.size - 4096) {
+                throw IllegalStateException("下到 " + (out.length() / 1024 / 1024) + "MB 就断了")
+            }
             onProgress(1f)
-            out
-        }
     }
 
     /** 拉起系统安装器 */

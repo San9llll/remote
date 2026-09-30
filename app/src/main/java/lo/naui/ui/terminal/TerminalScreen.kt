@@ -1069,7 +1069,24 @@ private fun BootstrapBar(onDone: () -> Unit) {
                     selfTest = r
                 }
             }
-            SmallAction("清掉半装的") {
+            SmallAction("重装环境") {
+                busy = true
+                error = null
+                scope.launch {
+                    Bootstrap.reinstallFromCache(ctx) { pr, st ->
+                        progress = pr
+                        status = st + " " + (pr * 100).toInt() + "%"
+                    }
+                        .onSuccess {
+                            status = "重装完了"
+                            selfTest = Bootstrap.selfTest(ctx)
+                            onDone()
+                        }
+                        .onFailure { error = it.message }
+                    busy = false
+                }
+            }
+            SmallAction("清掉环境") {
                 Bootstrap.uninstall(ctx)
                 status = ""
                 error = null
@@ -1077,6 +1094,16 @@ private fun BootstrapBar(onDone: () -> Unit) {
                 onDone()
             }
         }
+        if (Bootstrap.isInstalled(ctx)) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "提示：v0.19 之前装的版本，路径可能被旧版重写写坏（bash 会报 is a directory）。" +
+                    "点「重装环境」修一次就好，不用重新下包",
+                fontSize = 10.sp,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            )
+        }
+
         selfTest?.let {
             Spacer(Modifier.height(6.dp))
             Box(

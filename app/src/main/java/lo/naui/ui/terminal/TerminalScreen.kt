@@ -125,7 +125,7 @@ fun TerminalScreen(onBack: () -> Unit) {
     }
 
     val scope = rememberCoroutineScope()
-    val pagerState = rememberPagerState(pageCount = { sessions.coerceAtLeast(1).size })
+    val pagerState = rememberPagerState(pageCount = { maxOf(sessions.size, 1) })
 
     Column(Modifier.fillMaxSize()) {
         PageHeader(

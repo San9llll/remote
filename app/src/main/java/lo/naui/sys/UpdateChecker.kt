@@ -95,7 +95,7 @@ object UpdateChecker {
                     }
                 }
             }
-            UpdateInfo(version, json.optString("body", ""), asset)
+            return UpdateInfo(version, json.optString("body", ""), asset)
     }
 
     /** 版本号比大小：0.10.0 比 0.9.0 新 */
@@ -130,13 +130,20 @@ object UpdateChecker {
             if (out.exists() && out.length() == asset.size && asset.size > 0) return@runCatching out
 
             var lastErr: Throwable? = null
+            var ok = false
             for (u in assetUrls(asset)) {
                 val r = runCatching { downloadFrom(u, out, asset, onProgress) }
-                if (r.isSuccess) return@runCatching out
+                if (r.isSuccess) {
+                    ok = true
+                    break
+                }
                 lastErr = r.exceptionOrNull()
                 runCatching { out.delete() }
             }
-            throw IllegalStateException(lastErr?.message ?: "下载失败")
+            // 用 if 而不是在末尾 throw —— runCatching 的 block 以 throw 结尾时
+            // 返回类型会被推成 Nothing，跟 Result<File> 对不上（CI 报 Missing return statement）
+            if (!ok) error(lastErr?.message ?: "下载失败")
+            out
         }
     }
 

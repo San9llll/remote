@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -596,7 +597,11 @@ private fun SpeedDialog(
 }
 
 @Composable
-private fun SpeedChip(value: Float, current: Float, onChange: (Float) -> Unit) {
+private fun RowScope.SpeedChip(
+    value: Float,
+    current: Float,
+    onChange: (Float) -> Unit,
+) {
     val on = kotlin.math.abs(value - current) < 0.01f
     Box(
         Modifier

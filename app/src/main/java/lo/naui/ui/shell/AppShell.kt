@@ -79,7 +79,10 @@ private const val COMPACT_WIDTH_DP = 600f
 
 private val NAV_DESTS = listOf(Dest.Home, Dest.Modules, Dest.Overview, Dest.Settings)
 
-private enum class Sub { None, Theme, About, Files, Terminal, AgentConfig, AgentSessions }
+private enum class Sub {
+        None, Theme, About, Files, Terminal, AgentConfig, AgentSessions,
+        Shelf, NewBook, Reader, BookConfig,
+    }
 
 /**
  * 外壳 —— 结构对齐参考项目（Aster 的 AsterAppShell）：
@@ -93,6 +96,8 @@ private enum class Sub { None, Theme, About, Files, Terminal, AgentConfig, Agent
 fun AppShell(prefs: ThemePrefs) {
     var current by remember { mutableStateOf(Dest.Home) }
     var sub by remember { mutableStateOf(Sub.None) }
+    // 书柜里当前翻开的是哪本
+    var bookId by remember { mutableStateOf("") }
 
     val configuration = LocalConfiguration.current
     val widthDp = configuration.screenWidthDp
@@ -181,6 +186,7 @@ fun AppShell(prefs: ThemePrefs) {
                 Dest.Modules -> ToolsScreen(
                     onOpenFiles = { sub = Sub.Files },
                     onOpenTerminal = { sub = Sub.Terminal },
+                    onOpenShelf = { sub = Sub.Shelf },
                     backdrop = backdrop,
                 )
                 Dest.Overview -> AgentScreen(
@@ -199,6 +205,25 @@ fun AppShell(prefs: ThemePrefs) {
             Sub.Terminal -> lo.naui.ui.terminal.TerminalScreen(onBack = { sub = Sub.None })
             Sub.AgentConfig -> AgentConfigScreen(onBack = { sub = Sub.None })
             Sub.AgentSessions -> AgentSessionsScreen(onBack = { sub = Sub.None })
+
+            Sub.Shelf -> lo.naui.ui.book.ShelfScreen(
+                onOpenBook = { id -> bookId = id; sub = Sub.Reader },
+                onNewBook = { sub = Sub.NewBook },
+                backdrop = backdrop,
+            )
+            Sub.NewBook -> lo.naui.ui.book.NewBookScreen(
+                onBack = { sub = Sub.Shelf },
+                onCreated = { id -> bookId = id; sub = Sub.Reader },
+            )
+            Sub.Reader -> lo.naui.ui.book.ReaderScreen(
+                bookId = bookId,
+                onBack = { sub = Sub.Shelf },
+                onOpenConfig = { sub = Sub.BookConfig },
+            )
+            Sub.BookConfig -> lo.naui.ui.book.BookConfigScreen(
+                bookId = bookId,
+                onBack = { sub = Sub.Reader },
+            )
         }
     }
 

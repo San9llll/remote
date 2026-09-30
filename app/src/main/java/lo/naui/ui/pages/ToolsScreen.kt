@@ -27,6 +27,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 fun ToolsScreen(
     onOpenFiles: () -> Unit,
     onOpenTerminal: () -> Unit,
+    onOpenShelf: () -> Unit,
     backdrop: com.kyant.backdrop.Backdrop? = null,
 ) {
     Column(
@@ -60,6 +61,11 @@ fun ToolsScreen(
                     title = "终端",
                     summary = "按当前最高权限执行命令（root / Shizuku / 本地 sh）",
                     onClick = onOpenTerminal,
+                )
+                ArrowPreference(
+                    title = "雫的书柜",
+                    summary = "写小说 · AI 续写 · 分角色配音朗读",
+                    onClick = onOpenShelf,
                 )
             }
         }

@@ -86,6 +86,76 @@ object AgentApi {
         text.ifBlank { throw IllegalStateException("返回里没有内容：" + body.take(300)) }
     }
 
+    /**
+     * 通用入口：自己给 baseUrl / key / model / 系统提示词。
+     *
+     * 书柜要用"你是小说家"这类提示词，不能吃 Agent 页那套人格，
+     * 所以单独开一个口子，配置还是从 AgentStore 取（用户只填一份）。
+     */
+    suspend fun completeWith(
+        system: String,
+        history: List<ChatMessage>,
+        temperature: Float = 0.85f,
+        maxTokens: Int = 4096,
+        baseUrl: String = AgentStore.baseUrl,
+        apiKey: String = AgentStore.apiKey,
+        model: String = AgentStore.model,
+    ): String = withContext(Dispatchers.IO) {
+        val url = URL(endpoint(baseUrl, "chat/completions"))
+        val conn = (url.openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 20_000
+            readTimeout = TIMEOUT_MS
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            setRequestProperty("Authorization", "Bearer " + apiKey)
+            setRequestProperty("Accept", "application/json")
+        }
+
+        runCatching {
+            conn.outputStream.use { it.write(buildBody(system, history, temperature, maxTokens).toByteArray(Charsets.UTF_8)) }
+        }.getOrElse {
+            conn.disconnect()
+            throw IllegalStateException("连不上 " + url.host + "：" + (it.message ?: ""))
+        }
+
+        val code = conn.responseCode
+        val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+        val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+        conn.disconnect()
+
+        if (code !in 200..299) {
+            val msg = runCatching { JSONObject(body).optJSONObject("error")?.optString("message") }.getOrNull()
+            throw IllegalStateException("HTTP " + code + "：" + (msg?.takeIf { it.isNotBlank() } ?: body.take(300)))
+        }
+
+        val text = runCatching {
+            JSONObject(body).optJSONArray("choices")
+                ?.optJSONObject(0)
+                ?.optJSONObject("message")
+                ?.optString("content")
+        }.getOrNull().orEmpty()
+
+        text.ifBlank { throw IllegalStateException("返回里没有内容：" + body.take(300)) }
+    }
+
+    private fun buildBody(system: String, history: List<ChatMessage>, temperature: Float, maxTokens: Int): String {
+        val root = JSONObject()
+        root.put("model", AgentStore.model)
+        root.put("temperature", temperature.toDouble())
+        root.put("max_tokens", maxTokens)
+        root.put("stream", false)
+        val messages = JSONArray()
+        if (system.isNotBlank()) {
+            messages.put(JSONObject().put("role", "system").put("content", system))
+        }
+        history.forEach { m ->
+            messages.put(JSONObject().put("role", m.role).put("content", m.text))
+        }
+        root.put("messages", messages)
+        return root.toString()
+    }
+
     private fun buildBody(history: List<ChatMessage>): String {
         val root = JSONObject()
         root.put("model", AgentStore.model)

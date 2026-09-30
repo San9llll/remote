@@ -32,6 +32,11 @@ fun TerminalCanvas(
     scrollOffset: Int,
     /** 每帧都变，用它逼着 Canvas 重画 */
     tick: Int,
+    fgDefault: Int,
+    bgDefault: Int,
+    cursorColor: Int,
+    /** 选中的格子（row*cols+col，只算当前屏） */
+    selection: Set<Int>,
     modifier: Modifier = Modifier,
     onCellSize: (Float, Float) -> Unit,
     onScroll: (Int) -> Unit,
@@ -75,9 +80,6 @@ fun TerminalCanvas(
         val bottom = (total - offset).coerceIn(0, total)
         val top = (bottom - emulator.rows).coerceAtLeast(0)
 
-        val fgDefault = TerminalColor.DEFAULT_FG
-        val bgDefault = TerminalColor.DEFAULT_BG
-
         for (vy in 0 until emulator.rows) {
             val idx = top + vy
             val line = emulator.lineAt(idx) ?: continue
@@ -89,9 +91,11 @@ fun TerminalCanvas(
                 val bg = line.bg[c]
                 var end = c
                 while (end + 1 < emulator.cols && line.bg[end + 1] == bg) end++
-                if (bg != bgDefault) {
+                var drawBg = bg != bgDefault || selection.contains(idxRow(vy, c, emulator.cols))
+                if (drawBg) {
                     drawRect(
-                        color = Color(bg),
+                        color = if (selection.contains(idxRow(vy, c, emulator.cols)))
+                            Color(cursorColor).copy(alpha = 0.30f) else Color(bg),
                         topLeft = Offset(c * cellW, y),
                         size = Size((end - c + 1) * cellW, cellH),
                     )
@@ -150,12 +154,26 @@ fun TerminalCanvas(
             }
         }
 
+        // ---- 选中格单独补一层（跨样式段也要覆盖到）----
+        if (selection.isNotEmpty() && offset == 0) {
+            selection.forEach { idx ->
+                val r = idx / emulator.cols
+                val cc = idx % emulator.cols
+                if (r == emulator.cursorRow && cc == emulator.cursorCol) return@forEach
+                drawRect(
+                    color = Color(cursorColor).copy(alpha = 0.30f),
+                    topLeft = Offset(cc * cellW, r * cellH),
+                    size = Size(cellW, cellH),
+                )
+            }
+        }
+
         // ---- 光标（回看历史时不画）----
         if (offset == 0 && emulator.cursorVisible) {
             val cy = emulator.cursorRow * cellH
             val cx = emulator.cursorCol * cellW
             drawRect(
-                color = Color(TerminalColor.DEFAULT_CURSOR).copy(alpha = 0.35f),
+                color = Color(cursorColor).copy(alpha = 0.35f),
                 topLeft = Offset(cx, cy),
                 size = Size(cellW, cellH),
             )
@@ -164,7 +182,7 @@ fun TerminalCanvas(
             val ch = line?.text?.getOrNull(emulator.cursorCol)
             if (ch == null || ch == ' ') {
                 drawRect(
-                    color = Color(TerminalColor.DEFAULT_CURSOR).copy(alpha = 0.7f),
+                    color = Color(cursorColor).copy(alpha = 0.7f),
                     topLeft = Offset(cx + cellW * 0.2f, cy + cellH * 0.15f),
                     size = Size(cellW * 0.6f, cellH * 0.7f),
                 )
@@ -173,10 +191,9 @@ fun TerminalCanvas(
     }
 }
 
+private fun idxRow(row: Int, col: Int, cols: Int): Int = row * cols + col
+
 private fun alphaOf(color: Int, factor: Float): Int {
     val a = ((color ushr 24) and 0xFF) * factor
     return (color and 0x00FFFFFF) or ((a.toInt() and 0xFF) shl 24)
 }
-
-/** 终端默认底色，外面那层 Box 用它 */
-val TerminalBackground: Color = Color(TerminalColor.DEFAULT_BG)

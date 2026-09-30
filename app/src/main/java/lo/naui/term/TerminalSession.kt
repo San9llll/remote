@@ -19,9 +19,13 @@ class TerminalSession(
     val env: Array<String>,
     rows: Int,
     cols: Int,
+    palette: IntArray = TerminalColor.BASE16,
+    defaultFg: Int = TerminalColor.DEFAULT_FG,
+    defaultBg: Int = TerminalColor.DEFAULT_BG,
+    maxScrollback: Int = 4000,
 ) {
 
-    val emulator = TerminalEmulator(rows, cols) { s -> write(s) }
+    val emulator = TerminalEmulator(rows, cols, palette, defaultFg, defaultBg, maxScrollback) { s -> write(s) }
 
     @Volatile var pid: Int = -1
         private set

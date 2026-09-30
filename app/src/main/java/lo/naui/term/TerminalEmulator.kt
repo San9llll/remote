@@ -12,8 +12,27 @@ package lo.naui.term
 class TerminalEmulator(
     var rows: Int,
     var cols: Int,
+    /** 用户选的那套配色（ANSI 0-15 就从这儿取） */
+    var palette: IntArray = TerminalColor.BASE16,
+    var defaultFg: Int = TerminalColor.DEFAULT_FG,
+    var defaultBg: Int = TerminalColor.DEFAULT_BG,
+    maxScrollback: Int = 4000,
     private val respond: (String) -> Unit,
 ) {
+
+    /** 回看最多留多少行 */
+    var maxScrollback: Int = maxScrollback
+        set(value) {
+            field = value.coerceIn(200, 50000)
+            while (scrollback.size > field) scrollback.removeFirst()
+        }
+
+    /** 256 色里前 16 个用用户的配色，后面用标准表 */
+    private fun paletteOf(index: Int): Int {
+        val i = index and 0xFF
+        return if (i < 16) palette.getOrElse(i) { TerminalColor.BASE16[i] }
+        else TerminalColor.EXTENDED[i]
+    }
 
     companion object {
         /** 宽字符（中文那种占两格）的第二格，用这个占位 */
@@ -25,13 +44,27 @@ class TerminalEmulator(
         private const val OSC = 3
         private const val CHARSET = 4
 
-        private const val MAX_SCROLLBACK = 4000
     }
 
     /* ---------------- 屏幕 ---------------- */
 
     var screen: Array<TerminalLine> = Array(rows) { TerminalLine(cols) }
         private set
+
+    /** 换配色时把默认色的格子刷新一遍 */
+    fun applyPalette(newPalette: IntArray, fg: Int, bg: Int) {
+        palette = newPalette
+        defaultFg = fg
+        defaultBg = bg
+        if (curFg == oldDefaultFg) curFg = fg
+        if (curBg == oldDefaultBg) curBg = bg
+        oldDefaultFg = fg
+        oldDefaultBg = bg
+        onChange?.invoke()
+    }
+
+    private var oldDefaultFg = defaultFg
+    private var oldDefaultBg = defaultBg
     private var altScreen: Array<TerminalLine>? = null
     var usingAltScreen = false
         private set
@@ -57,9 +90,9 @@ class TerminalEmulator(
 
     /* ---------------- 当前样式 ---------------- */
 
-    var curFg = TerminalColor.DEFAULT_FG
+    var curFg = defaultFg
         private set
-    var curBg = TerminalColor.DEFAULT_BG
+    var curBg = defaultBg
         private set
     var curFlags = 0
         private set
@@ -258,7 +291,7 @@ class TerminalEmulator(
                 System.arraycopy(top.bg, 0, copy.bg, 0, cols)
                 System.arraycopy(top.flags, 0, copy.flags, 0, cols)
                 scrollback.addLast(copy)
-                while (scrollback.size > MAX_SCROLLBACK) scrollback.removeFirst()
+                while (scrollback.size > maxScrollback) scrollback.removeFirst()
             }
             for (r in scrollTop until scrollBottom) {
                 val src = screen[r + 1]
@@ -531,8 +564,8 @@ class TerminalEmulator(
 
     private fun sgr() {
         if (paramCount == 0) {
-            curFg = TerminalColor.DEFAULT_FG
-            curBg = TerminalColor.DEFAULT_BG
+            curFg = defaultFg
+            curBg = defaultBg
             curFlags = 0
             return
         }
@@ -540,7 +573,7 @@ class TerminalEmulator(
         while (i < paramCount) {
             val v = if (params[i] < 0) 0 else params[i]
             when {
-                v == 0 -> { curFg = TerminalColor.DEFAULT_FG; curBg = TerminalColor.DEFAULT_BG; curFlags = 0 }
+                v == 0 -> { curFg = defaultFg; curBg = defaultBg; curFlags = 0 }
                 v == 1 -> curFlags = curFlags or Attr.BOLD
                 v == 2 -> curFlags = curFlags or Attr.DIM
                 v == 3 -> curFlags = curFlags or Attr.ITALIC
@@ -556,18 +589,18 @@ class TerminalEmulator(
                 v == 27 -> curFlags = curFlags and Attr.REVERSE.inv()
                 v == 28 -> curFlags = curFlags and Attr.HIDDEN.inv()
                 v == 29 -> curFlags = curFlags and Attr.STRIKE.inv()
-                v in 30..37 -> curFg = TerminalColor.of(v - 30)
-                v == 39 -> curFg = TerminalColor.DEFAULT_FG
-                v in 40..47 -> curBg = TerminalColor.of(v - 40)
-                v == 49 -> curBg = TerminalColor.DEFAULT_BG
-                v in 90..97 -> curFg = TerminalColor.of(v - 90 + 8)
-                v in 100..107 -> curBg = TerminalColor.of(v - 100 + 8)
+                v in 30..37 -> curFg = paletteOf(v - 30)
+                v == 39 -> curFg = defaultFg
+                v in 40..47 -> curBg = paletteOf(v - 40)
+                v == 49 -> curBg = defaultBg
+                v in 90..97 -> curFg = paletteOf(v - 90 + 8)
+                v in 100..107 -> curBg = paletteOf(v - 100 + 8)
                 v == 38 || v == 48 -> {
                     val isFg = v == 38
                     val kind = if (i + 1 < paramCount && params[i + 1] >= 0) params[i + 1] else 0
                     if (kind == 5 && i + 2 < paramCount) {
                         val idx = if (params[i + 2] < 0) 0 else params[i + 2]
-                        if (isFg) curFg = TerminalColor.of(idx) else curBg = TerminalColor.of(idx)
+                        if (isFg) curFg = paletteOf(idx) else curBg = paletteOf(idx)
                         i += 2
                     } else if (kind == 2 && i + 4 < paramCount) {
                         val r = if (params[i + 2] < 0) 0 else params[i + 2]
@@ -617,7 +650,7 @@ class TerminalEmulator(
                 src.resize(cols)
                 if (!usingAltScreen) {
                     scrollback.addLast(src)
-                    while (scrollback.size > MAX_SCROLLBACK) scrollback.removeFirst()
+                    while (scrollback.size > maxScrollback) scrollback.removeFirst()
                 }
             }
         }
@@ -637,8 +670,8 @@ class TerminalEmulator(
         cursorCol = 0
         scrollTop = 0
         scrollBottom = rows - 1
-        curFg = TerminalColor.DEFAULT_FG
-        curBg = TerminalColor.DEFAULT_BG
+        curFg = defaultFg
+        curBg = defaultBg
         curFlags = 0
         autoWrap = true
         originMode = false

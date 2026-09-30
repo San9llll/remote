@@ -48,8 +48,8 @@ object TerminalColor {
         0xFF3B8EEA.toInt(), 0xFFD670D6.toInt(), 0xFF29B8DB.toInt(), 0xFFFFFFFF.toInt(),
     )
 
-    /** 256 色表：16 标准 + 216 色立方 + 24 灰阶 */
-    private val TABLE: IntArray = IntArray(256).also { t ->
+    /** 16 号之后的表：216 色立方 + 24 灰阶。前 16 个用用户选的那套配色。 */
+    val EXTENDED: IntArray = IntArray(256).also { t ->
         for (i in 0 until 16) t[i] = BASE16[i]
         var i = 16
         for (r in 0 until 6) for (g in 0 until 6) for (b in 0 until 6) {
@@ -64,7 +64,7 @@ object TerminalColor {
         }
     }
 
-    fun of(index: Int): Int = TABLE[index and 0xFF]
+    fun of(index: Int): Int = EXTENDED[index and 0xFF]
 
     fun rgb(r: Int, g: Int, b: Int): Int =
         (0xFF shl 24) or ((r and 0xFF) shl 16) or ((g and 0xFF) shl 8) or (b and 0xFF)

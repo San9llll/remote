@@ -1,9 +1,13 @@
 package lo.naui.ui.terminal
 
+import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -14,15 +18,21 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -30,8 +40,10 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
@@ -41,11 +53,17 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.io.File
+import kotlinx.coroutines.launch
 import lo.naui.sys.PrivLevel
 import lo.naui.sys.Privilege
+import lo.naui.term.ColorSchemes
+import lo.naui.term.ExtraKey
+import lo.naui.term.ExtraKeys
+import lo.naui.term.ModifierKey
 import lo.naui.term.TerminalCanvas
 import lo.naui.term.TerminalKeys
 import lo.naui.term.TerminalSession
+import lo.naui.term.TerminalSettings
 import lo.naui.ui.common.PageHeader
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -53,115 +71,274 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 /**
  * 终端。
  *
- * 底下是**真 PTY**（native 里 forkpty 出来的），上面是自己写的 xterm 模拟器。
- * 所以 vim / top / htop 这类全屏程序能正常跑 —— 它们看到的是个真终端，
- * 不是一根被重定向的管子。
- *
- * 光标键会看程序有没有开 DECCKM；Ctrl 会转成控制码；Ctrl+C 发给整个前台进程组。
+ * 底层是真 PTY（native forkpty），上面是自己写的 xterm 模拟器。
+ * 交互照 termux 那套来：**左右滑切会话**、长按选区复制、功能键两排、
+ * 配色/字号/开关都有面板可调。
  */
 @Composable
 fun TerminalScreen(onBack: () -> Unit) {
     val ctx = LocalContext.current
-    val focus = remember { FocusRequester() }
+    TerminalSettings.init(ctx)
+    val scheme = TerminalSettings.scheme
 
-    var tick by remember { mutableStateOf(0) }
+    var tick by remember { mutableIntStateOf(0) }
     var level by remember { mutableStateOf(PrivLevel.Normal) }
-    var scrollOffset by remember { mutableStateOf(0) }
-    var cellW by remember { mutableStateOf(0f) }
-    var cellH by remember { mutableStateOf(0f) }
-    var box by remember { mutableStateOf(IntSize.Zero) }
-    var fontSize by remember { mutableStateOf(12.5f) }
-    var ctrlActive by remember { mutableStateOf(false) }
-    var altActive by remember { mutableStateOf(false) }
-    var inputBuf by remember { mutableStateOf("") }
-    var sessionKey by remember { mutableStateOf(0) }
+    var showSettings by remember { mutableStateOf(false) }
+    var showSessions by remember { mutableStateOf(false) }
 
     val home = remember { File(ctx.filesDir, "home").apply { mkdirs() }.absolutePath }
     val env = remember { TerminalSession.defaultEnv(ctx.filesDir) }
 
-    val session = remember(sessionKey) {
-        TerminalSession(
-            shellPath = "/system/bin/sh",
-            cwd = home,
-            env = env,
-            rows = 24,
-            cols = 80,
+    fun makeSession(): TerminalSession = TerminalSession(
+        shellPath = "/system/bin/sh",
+        cwd = home,
+        env = env,
+        rows = 24,
+        cols = 80,
+        palette = scheme.palette,
+        defaultFg = scheme.fg,
+        defaultBg = scheme.bg,
+        maxScrollback = TerminalSettings.scrollbackLines,
+    )
+
+    var sessions by remember { mutableStateOf<List<TerminalSession>>(emptyList()) }
+
+    LaunchedEffect(Unit) {
+        if (sessions.isEmpty()) {
+            val s = makeSession()
+            s.onOutput = { tick++ }
+            s.onExit = { tick++ }
+            s.start()
+            sessions = listOf(s)
+        }
+        level = Privilege.level(ctx)
+    }
+
+    // 换配色时，把已经开着的会话也刷一遍
+    LaunchedEffect(scheme.id) {
+        sessions.forEach { s -> s.emulator.applyPalette(scheme.palette, scheme.fg, scheme.bg) }
+        tick++
+    }
+
+    DisposableEffect(Unit) {
+        onDispose { sessions.forEach { runCatching { it.close() } } }
+    }
+
+    val scope = rememberCoroutineScope()
+    val pagerState = rememberPagerState(pageCount = { sessions.coerceAtLeast(1).size })
+
+    Column(Modifier.fillMaxSize()) {
+        PageHeader(
+            title = "终端",
+            subtitle = level.label +
+                " · " + sessions.size + " 个会话" +
+                (if (sessions.size > 1) " · 左右滑切换" else ""),
+            action = "新建",
+            onAction = {
+                val s = makeSession()
+                s.onOutput = { tick++ }
+                s.onExit = { tick++ }
+                s.start()
+                sessions = sessions + s
+            },
+            onBack = onBack,
+        )
+
+        // 会话条：点一下切，长按关掉
+        if (sessions.size > 1) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                sessions.forEachIndexed { i, s ->
+                    val active = pagerState.currentPage == i
+                    Box(
+                        Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(
+                                if (active) MiuixTheme.colorScheme.primary
+                                else MiuixTheme.colorScheme.surfaceContainerHigh
+                            )
+                            .clickable { showSessions = true }
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                    ) {
+                        Text(
+                            "#" + (i + 1) + if (s.running) "" else " ✗",
+                            fontSize = 11.5.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = if (active) MiuixTheme.colorScheme.onPrimary
+                            else MiuixTheme.colorScheme.onSurface,
+                        )
+                    }
+                }
+            }
+        }
+
+        if (sessions.isNotEmpty()) {
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                beyondViewportPageCount = 1,
+            ) { page ->
+                val session = sessions.getOrNull(page)
+                if (session != null) {
+                    TerminalPage(
+                        session = session,
+                        tick = tick,
+                        onTick = { tick++ },
+                        onOpenSettings = { showSettings = true },
+                    )
+                }
+            }
+        } else {
+            Spacer(Modifier.weight(1f))
+        }
+    }
+
+    if (showSettings) {
+        TerminalSettingsPanel(onDismiss = { showSettings = false })
+    }
+
+    if (showSessions) {
+        SessionPanel(
+            sessions = sessions,
+            currentPage = pagerState.currentPage,
+            onSelect = { i -> scope.launch { pagerState.scrollToPage(i) } },
+            onClose = { i ->
+                val s = sessions.getOrNull(i)
+                runCatching { s?.close() }
+                sessions = sessions.filterIndexed { idx, _ -> idx != i }
+                showSessions = false
+            },
+            onDismiss = { showSessions = false },
         )
     }
+}
 
-    DisposableEffect(session) {
-        session.onOutput = { tick++ }
-        session.onExit = { tick++ }
-        session.start()
-        onDispose { session.close() }
-    }
+/* ---------------- 一页终端 ---------------- */
 
-    LaunchedEffect(session) { level = Privilege.level(ctx) }
+@Composable
+private fun TerminalPage(
+    session: TerminalSession,
+    tick: Int,
+    onTick: () -> Unit,
+    onOpenSettings: () -> Unit,
+) {
+    val ctx = LocalContext.current
+    val focus = remember { FocusRequester() }
+    val emu = session.emulator
+    val scheme = TerminalSettings.scheme
 
-    // 尺寸变了就告诉内核（vim 靠这个排版）
-    LaunchedEffect(cellW, cellH, box, sessionKey) {
+    var scrollOffset by remember { mutableStateOf(0) }
+    var cellW by remember { mutableStateOf(0f) }
+    var cellH by remember { mutableStateOf(0f) }
+    var box by remember { mutableStateOf(IntSize.Zero) }
+    var ctrlActive by remember { mutableStateOf(false) }
+    var altActive by remember { mutableStateOf(false) }
+    var inputBuf by remember { mutableStateOf("") }
+    var selection by remember { mutableStateOf<Set<Int>>(emptySet()) }
+    var selStart by remember { mutableStateOf(-1) }
+    var selText by remember { mutableStateOf("") }
+
+    LaunchedEffect(cellW, cellH, box) {
         if (cellW > 0f && cellH > 0f && box.width > 0 && box.height > 0) {
             val cols = (box.width / cellW).toInt().coerceAtLeast(20)
             val rows = (box.height / cellH).toInt().coerceAtLeast(4)
             session.cellWidthPx = cellW.toInt()
             session.cellHeightPx = cellH.toInt()
             session.resize(rows, cols)
-            tick++
+            onTick()
         }
     }
 
-    val emu = session.emulator
+    fun cellAt(offset: Offset): Int {
+        if (cellW <= 0f || cellH <= 0f) return -1
+        val col = (offset.x / cellW).toInt().coerceIn(0, emu.cols - 1)
+        val row = (offset.y / cellH).toInt().coerceIn(0, emu.rows - 1)
+        return row * emu.cols + col
+    }
+
+    fun extractSelection(sel: Set<Int>): String {
+        if (sel.isEmpty()) return ""
+        val min = sel.min()
+        val max = sel.max()
+        val sb = StringBuilder()
+        for (i in min..max) {
+            val r = i / emu.cols
+            val c = i % emu.cols
+            if (c == 0 && sb.isNotEmpty()) sb.append('\n')
+            val line = emu.lineAt(emu.totalLines() - emu.rows + r) ?: continue
+            val ch = line.text.getOrNull(c) ?: ' '
+            if (ch != '\u0000') sb.append(ch)
+        }
+        return sb.toString().trimEnd()
+    }
 
     fun send(text: String) {
         scrollOffset = 0
         session.write(text)
     }
 
-    fun sendKey(text: String) {
-        scrollOffset = 0
-        session.write(text)
-    }
-
-    Column(Modifier.fillMaxSize()) {
-        PageHeader(
-            title = "终端",
-            subtitle = level.label + " · " + emu.cols + "x" + emu.rows +
-                (if (session.pid > 0) " · pid " + session.pid else "") +
-                (if (scrollOffset > 0) " · 回看 " + scrollOffset + " 行" else ""),
-            action = "重启",
-            onAction = {
-                sessionKey++
-                scrollOffset = 0
-            },
-            onBack = onBack,
-        )
-
-        // ---- 终端本体 ----
+    Column(Modifier.fillMaxSize().padding(horizontal = 8.dp)) {
         Box(
             Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .padding(horizontal = 8.dp)
                 .clip(RoundedCornerShape(12.dp))
-                .background(Color(0xFF101014))
+                .background(Color(scheme.bg))
                 .onSizeChanged { box = it }
-                .clickable { runCatching { focus.requestFocus() } },
+                .clickable {
+                    if (selection.isNotEmpty()) {
+                        selection = emptySet()
+                    } else {
+                        runCatching { focus.requestFocus() }
+                    }
+                }
+                .pointerInput(emu.cols, emu.rows, cellW, cellH) {
+                    detectDragGesturesAfterLongPress(
+                        onDragStart = { pos ->
+                            val idx = cellAt(pos)
+                            if (idx >= 0) {
+                                selStart = idx
+                                selection = setOf(idx)
+                                selText = ""
+                            }
+                        },
+                        onDrag = { change, _ ->
+                            val idx = cellAt(change.position)
+                            if (idx >= 0 && selStart >= 0) {
+                                val a = minOf(selStart, idx)
+                                val b = maxOf(selStart, idx)
+                                selection = (a..b).toSet()
+                                selText = extractSelection(selection)
+                            }
+                        },
+                        onDragEnd = {
+                            if (selection.isEmpty()) selText = ""
+                        },
+                    )
+                },
         ) {
             TerminalCanvas(
                 emulator = emu,
-                fontSizeSp = fontSize,
+                fontSizeSp = TerminalSettings.fontSize,
                 scrollOffset = scrollOffset,
                 tick = tick,
+                fgDefault = scheme.fg,
+                bgDefault = scheme.bg,
+                cursorColor = scheme.cursor,
+                selection = selection,
                 modifier = Modifier.fillMaxSize().padding(4.dp),
                 onCellSize = { w, h -> cellW = w; cellH = h },
                 onScroll = { lines ->
-                    // 往下拖（正数）是回看历史
                     val max = emu.scrollback.size
                     scrollOffset = (scrollOffset + lines).coerceIn(0, max)
                 },
             )
 
-            // 藏在后面接软键盘输入的
             BasicTextField(
                 value = inputBuf,
                 onValueChange = { s ->
@@ -179,18 +356,56 @@ fun TerminalScreen(onBack: () -> Unit) {
                             send(add)
                         }
                         s.length < inputBuf.length -> {
-                            repeat(inputBuf.length - s.length) { sendKey(TerminalKeys.BACKSPACE) }
+                            repeat(inputBuf.length - s.length) { send(TerminalKeys.BACKSPACE) }
                         }
                     }
                     inputBuf = ""
                 },
-                modifier = Modifier
-                    .fillMaxSize()
-                    .alpha(0f)
-                    .focusRequester(focus),
+                modifier = Modifier.fillMaxSize().alpha(0f).focusRequester(focus),
                 textStyle = TextStyle(fontSize = 1.sp),
                 cursorBrush = SolidColor(Color.Transparent),
             )
+
+            if (selection.isNotEmpty()) {
+                Row(
+                    Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(8.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(MiuixTheme.colorScheme.surface.copy(alpha = 0.94f))
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "已选 " + selection.size + " 格",
+                        fontSize = 11.sp,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    )
+                    SmallAction("复制") {
+                        val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                        cm?.setPrimaryClip(ClipData.newPlainText("terminal", selText))
+                        selection = emptySet()
+                        onTick()
+                    }
+                    SmallAction("全选") {
+                        selection = (0 until emu.rows * emu.cols).toSet()
+                        selText = extractSelection(selection)
+                    }
+                    if (selText.startsWith("http://") || selText.startsWith("https://")) {
+                        SmallAction("打开") {
+                            runCatching {
+                                ctx.startActivity(
+                                    Intent(Intent.ACTION_VIEW, Uri.parse(selText))
+                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                )
+                            }
+                            selection = emptySet()
+                        }
+                    }
+                    SmallAction("取消") { selection = emptySet() }
+                }
+            }
 
             if (scrollOffset > 0) {
                 Box(
@@ -207,42 +422,58 @@ fun TerminalScreen(onBack: () -> Unit) {
             }
         }
 
-        // ---- 特殊键 ----
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            KeyChip("Ctrl", active = ctrlActive) { ctrlActive = !ctrlActive }
-            KeyChip("Alt", active = altActive) { altActive = !altActive }
-            KeyChip("Esc") { sendKey(TerminalKeys.ESC) }
-            KeyChip("Tab") { sendKey(TerminalKeys.TAB) }
-            KeyChip("↑") { sendKey(TerminalKeys.up(emu.isCursorKeysApp)) }
-            KeyChip("↓") { sendKey(TerminalKeys.down(emu.isCursorKeysApp)) }
-            KeyChip("←") { sendKey(TerminalKeys.left(emu.isCursorKeysApp)) }
-            KeyChip("→") { sendKey(TerminalKeys.right(emu.isCursorKeysApp)) }
-            KeyChip("Home") { sendKey(TerminalKeys.HOME) }
-            KeyChip("End") { sendKey(TerminalKeys.END) }
-            KeyChip("PgUp") { sendKey(TerminalKeys.PAGE_UP) }
-            KeyChip("PgDn") { sendKey(TerminalKeys.PAGE_DOWN) }
-            KeyChip("^C") { session.sendCtrlC() }
-            KeyChip("^Z") { session.sendCtrlZ() }
-            KeyChip("粘贴") {
-                val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                val t = cm?.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.text?.toString()
-                if (!t.isNullOrEmpty()) send(t)
+        // ---- 功能键 ----
+        val rows = TerminalSettings.extraKeysRows
+        if (rows >= 1) {
+            KeyRow(ExtraKeys.ROW1, emu.isCursorKeysApp, ctrlActive, altActive,
+                onCtrl = { ctrlActive = !ctrlActive },
+                onAlt = { altActive = !altActive },
+                onKey = { k -> ExtraKeys.resolve(k, emu.isCursorKeysApp)?.let { send(it) } },
+                onSettings = onOpenSettings,
+                extra = { SmallAction("^C") { session.sendCtrlC() } })
+        }
+        if (rows >= 2) {
+            KeyRow(ExtraKeys.ROW2, emu.isCursorKeysApp, ctrlActive, altActive,
+                onCtrl = { ctrlActive = !ctrlActive },
+                onAlt = { altActive = !altActive },
+                onKey = { k -> ExtraKeys.resolve(k, emu.isCursorKeysApp)?.let { send(it) } },
+                onSettings = null,
+                extra = {
+                    SmallAction("粘贴") {
+                        val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                        val t = cm?.primaryClip?.takeIf { it.itemCount > 0 }
+                            ?.getItemAt(0)?.text?.toString()
+                        if (!t.isNullOrEmpty()) send(t)
+                    }
+                    SmallAction("⚙") { onOpenSettings() }
+                })
+        } else if (rows == 1) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                SmallAction("粘贴") {
+                    val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                    val t = cm?.primaryClip?.takeIf { it.itemCount > 0 }
+                        ?.getItemAt(0)?.text?.toString()
+                    if (!t.isNullOrEmpty()) send(t)
+                }
+                SmallAction("⚙") { onOpenSettings() }
             }
-            KeyChip("小") { if (fontSize > 8f) fontSize -= 1f }
-            KeyChip("大") { if (fontSize < 24f) fontSize += 1f }
+        } else {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                SmallAction("⚙ 设置") { onOpenSettings() }
+            }
         }
 
-        // ---- 输入框（长得像提示符）----
+        // ---- 输入行 ----
         Row(
             Modifier
                 .fillMaxWidth()
-                .padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
+                .padding(start = 4.dp, end = 4.dp, bottom = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -259,58 +490,336 @@ fun TerminalScreen(onBack: () -> Unit) {
                     .clip(RoundedCornerShape(10.dp))
                     .background(MiuixTheme.colorScheme.surfaceContainerHigh)
                     .clickable { runCatching { focus.requestFocus() } }
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                    .padding(horizontal = 12.dp, vertical = 9.dp),
             ) {
-                val preview = inputBuf.ifEmpty { "点这里唤起键盘 · 特殊键用上面那排" }
                 Text(
-                    preview,
-                    fontSize = if (inputBuf.isEmpty()) 12.sp else 13.sp,
+                    inputBuf.ifEmpty { "点这里唤起键盘" },
+                    fontSize = 12.sp,
                     fontFamily = FontFamily.Monospace,
-                    color = if (inputBuf.isEmpty()) {
-                        MiuixTheme.colorScheme.onSurfaceVariantSummary
-                    } else {
-                        MiuixTheme.colorScheme.onSurface
-                    },
+                    color = if (inputBuf.isEmpty()) MiuixTheme.colorScheme.onSurfaceVariantSummary
+                    else MiuixTheme.colorScheme.onSurface,
                 )
             }
+            SmallAction("回车") { send("\r") }
+        }
+    }
+}
+
+@Composable
+private fun KeyRow(
+    keys: List<ExtraKey>,
+    app: Boolean,
+    ctrl: Boolean,
+    alt: Boolean,
+    onCtrl: () -> Unit,
+    onAlt: () -> Unit,
+    onKey: (ExtraKey) -> Unit,
+    onSettings: (() -> Unit)?,
+    extra: @Composable () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 6.dp, vertical = 3.dp),
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        keys.forEach { k ->
+            val active = (k.modifier == ModifierKey.CTRL && ctrl) ||
+                (k.modifier == ModifierKey.ALT && alt)
             Box(
                 Modifier
-                    .clip(RoundedCornerShape(50))
-                    .background(MiuixTheme.colorScheme.primary)
-                    .clickable { send("\r"); inputBuf = "" }
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(
+                        if (active) MiuixTheme.colorScheme.primary
+                        else MiuixTheme.colorScheme.surfaceContainerHigh
+                    )
+                    .clickable {
+                        when (k.modifier) {
+                            ModifierKey.CTRL -> onCtrl()
+                            ModifierKey.ALT -> onAlt()
+                            else -> onKey(k)
+                        }
+                    }
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
             ) {
                 Text(
-                    "回车",
+                    k.label,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = if (active) MiuixTheme.colorScheme.onPrimary
+                    else MiuixTheme.colorScheme.onSurface,
+                )
+            }
+        }
+        extra()
+    }
+}
+
+@Composable
+private fun SmallAction(label: String, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+            .clickable { onClick() }
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+    ) {
+        Text(label, fontSize = 11.5.sp, fontFamily = FontFamily.Monospace)
+    }
+}
+
+/* ---------------- 设置面板 ---------------- */
+
+@Composable
+private fun TerminalSettingsPanel(onDismiss: () -> Unit) {
+    val scheme = TerminalSettings.scheme
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.45f))
+            .clickable { onDismiss() },
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth(0.9f)
+                .clip(RoundedCornerShape(18.dp))
+                .background(MiuixTheme.colorScheme.surface)
+                .clickable { }
+                .padding(18.dp)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            Text("终端设置", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(12.dp))
+
+            Text("配色", fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+            Spacer(Modifier.height(6.dp))
+            ColorSchemes.LIST.chunked(2).forEach { pair ->
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    pair.forEach { cs ->
+                        val on = cs.id == scheme.id
+                        Row(
+                            Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(
+                                    if (on) MiuixTheme.colorScheme.primary.copy(alpha = 0.16f)
+                                    else MiuixTheme.colorScheme.surfaceContainerHigh
+                                )
+                                .clickable { TerminalSettings.updateScheme(cs.id) }
+                                .padding(horizontal = 8.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Box(
+                                Modifier
+                                    .width(14.dp)
+                                    .height(14.dp)
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(Color(cs.bg)),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                cs.name,
+                                fontSize = 11.sp,
+                                maxLines = 1,
+                                color = if (on) MiuixTheme.colorScheme.primary
+                                else MiuixTheme.colorScheme.onSurface,
+                            )
+                        }
+                    }
+                    if (pair.size == 1) Spacer(Modifier.weight(1f))
+                }
+            }
+
+            Spacer(Modifier.height(14.dp))
+            Text("字号 " + TerminalSettings.fontSize.toInt(), fontSize = 12.sp)
+            Row(
+                Modifier.fillMaxWidth().padding(top = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                SmallAction("小") { TerminalSettings.updateFontSize(TerminalSettings.fontSize - 1f) }
+                SmallAction("大") { TerminalSettings.updateFontSize(TerminalSettings.fontSize + 1f) }
+                SmallAction("重置") { TerminalSettings.updateFontSize(12.5f) }
+            }
+
+            Spacer(Modifier.height(14.dp))
+            Text("功能键行数", fontSize = 12.sp)
+            Row(
+                Modifier.fillMaxWidth().padding(top = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                listOf(0 to "不显示", 1 to "一排", 2 to "两排").forEach { (v, label) ->
+                    val on = TerminalSettings.extraKeysRows == v
+                    Box(
+                        Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(
+                                if (on) MiuixTheme.colorScheme.primary
+                                else MiuixTheme.colorScheme.surfaceContainerHigh
+                            )
+                            .clickable { TerminalSettings.updateExtraKeysRows(v) }
+                            .padding(horizontal = 12.dp, vertical = 7.dp),
+                    ) {
+                        Text(
+                            label,
+                            fontSize = 11.5.sp,
+                            color = if (on) MiuixTheme.colorScheme.onPrimary
+                            else MiuixTheme.colorScheme.onSurface,
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(14.dp))
+            TerminalSwitch("保持屏幕常亮", TerminalSettings.keepScreenOn) {
+                TerminalSettings.updateKeepScreenOn(it)
+            }
+            TerminalSwitch("响铃震动", TerminalSettings.bellVibrate) {
+                TerminalSettings.updateBellVibrate(it)
+            }
+            TerminalSwitch("音量键当 Ctrl", TerminalSettings.volumeKeysAsCtrl) {
+                TerminalSettings.updateVolumeKeysAsCtrl(it)
+            }
+            TerminalSwitch("识别并打开链接", TerminalSettings.openUrls) {
+                TerminalSettings.updateOpenUrls(it)
+            }
+
+            Spacer(Modifier.height(14.dp))
+            Text("回看行数 " + TerminalSettings.scrollbackLines, fontSize = 12.sp)
+            Row(
+                Modifier.fillMaxWidth().padding(top = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                listOf(1000, 4000, 10000, 20000).forEach { v ->
+                    SmallAction(if (v >= 1000) (v / 1000).toString() + "k" else v.toString()) {
+                        TerminalSettings.updateScrollback(v)
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(18.dp))
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(50))
+                    .background(MiuixTheme.colorScheme.primary)
+                    .clickable { onDismiss() }
+                    .padding(vertical = 11.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    "关闭",
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
                     color = MiuixTheme.colorScheme.onPrimary,
                 )
             }
         }
-
-        Spacer(Modifier.height(2.dp))
     }
 }
 
 @Composable
-private fun KeyChip(label: String, active: Boolean = false, onClick: () -> Unit) {
+private fun TerminalSwitch(title: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, fontSize = 12.5.sp, modifier = Modifier.weight(1f))
+        Box(
+            Modifier
+                .clip(RoundedCornerShape(50))
+                .background(
+                    if (checked) MiuixTheme.colorScheme.primary
+                    else MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.3f)
+                )
+                .clickable { onChange(!checked) }
+                .padding(horizontal = 12.dp, vertical = 5.dp),
+        ) {
+            Text(
+                if (checked) "开" else "关",
+                fontSize = 11.5.sp,
+                color = if (checked) MiuixTheme.colorScheme.onPrimary else Color.White,
+            )
+        }
+    }
+}
+
+/* ---------------- 会话列表 ---------------- */
+
+@Composable
+private fun SessionPanel(
+    sessions: List<TerminalSession>,
+    currentPage: Int,
+    onSelect: (Int) -> Unit,
+    onClose: (Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
     Box(
         Modifier
-            .clip(RoundedCornerShape(50))
-            .background(
-                if (active) MiuixTheme.colorScheme.primary
-                else MiuixTheme.colorScheme.surfaceContainerHigh
-            )
-            .clickable { onClick() }
-            .padding(horizontal = 12.dp, vertical = 7.dp),
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.45f))
+            .clickable { onDismiss() },
+        contentAlignment = Alignment.Center,
     ) {
-        Text(
-            label,
-            fontSize = 11.5.sp,
-            fontFamily = FontFamily.Monospace,
-            color = if (active) MiuixTheme.colorScheme.onPrimary
-            else MiuixTheme.colorScheme.onSurface,
-        )
+        Column(
+            Modifier
+                .fillMaxWidth(0.85f)
+                .clip(RoundedCornerShape(18.dp))
+                .background(MiuixTheme.colorScheme.surface)
+                .clickable { }
+                .padding(18.dp),
+        ) {
+            Text("会话", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(10.dp))
+            sessions.forEachIndexed { i, s ->
+                val active = i == currentPage
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(
+                            if (active) MiuixTheme.colorScheme.primary.copy(alpha = 0.14f)
+                            else MiuixTheme.colorScheme.surfaceContainerHigh
+                        )
+                        .clickable { onSelect(i); onDismiss() }
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "#" + (i + 1),
+                        fontSize = 12.5.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = if (active) MiuixTheme.colorScheme.primary
+                        else MiuixTheme.colorScheme.onSurface,
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        (if (s.running) "运行中" else "已退出") +
+                            (if (s.pid > 0) " · pid " + s.pid else ""),
+                        fontSize = 11.5.sp,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        modifier = Modifier.weight(1f),
+                    )
+                    SmallAction("关闭") { onClose(i) }
+                }
+                Spacer(Modifier.height(6.dp))
+            }
+            Spacer(Modifier.height(6.dp))
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(50))
+                    .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+                    .clickable { onDismiss() }
+                    .padding(vertical = 10.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("取消", fontSize = 13.sp)
+            }
+        }
     }
 }

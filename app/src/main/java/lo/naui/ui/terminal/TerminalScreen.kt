@@ -5,6 +5,8 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
@@ -872,6 +874,35 @@ private fun BootstrapBar(onDone: () -> Unit) {
     var progress by remember { mutableStateOf(0f) }
     var status by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
+    var showDiag by remember { mutableStateOf(false) }
+
+    // 网络下不来的时候，自己下好 zip 从这儿喂进来
+    val zipPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        busy = true
+        error = null
+        scope.launch {
+            runCatching {
+                val tmp = java.io.File(ctx.cacheDir, "user-bootstrap.zip")
+                ctx.contentResolver.openInputStream(uri)?.use { input ->
+                    java.io.FileOutputStream(tmp).use { out -> input.copyTo(out) }
+                }
+                if (tmp.length() < 512L * 1024L) {
+                    throw IllegalStateException("这个文件才 " + (tmp.length() / 1024) + "KB，不像 bootstrap")
+                }
+                Bootstrap.installFromUserZip(ctx, tmp) { pr, st ->
+                    progress = pr
+                    status = st + " " + (pr * 100).toInt() + "%"
+                }.getOrThrow()
+            }.onSuccess {
+                status = "装好了"
+                onDone()
+            }.onFailure {
+                error = it.message
+            }
+            busy = false
+        }
+    }
 
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -881,6 +912,7 @@ private fun BootstrapBar(onDone: () -> Unit) {
                     if (busy) status else "装完才有 bash / pkg / apt / git / python",
                     fontSize = 11.sp,
                     color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    maxLines = 2,
                 )
             }
             Box(
@@ -894,10 +926,11 @@ private fun BootstrapBar(onDone: () -> Unit) {
                         busy = true
                         error = null
                         progress = 0f
+                        status = "开始…"
                         scope.launch {
-                            Bootstrap.install(ctx) { p, st ->
-                                progress = p
-                                status = st + " " + (p * 100).toInt() + "%"
+                            Bootstrap.install(ctx) { pr, st ->
+                                progress = pr
+                                status = st + " " + (pr * 100).toInt() + "%"
                             }
                                 .onSuccess {
                                     status = "装好了"
@@ -910,13 +943,24 @@ private fun BootstrapBar(onDone: () -> Unit) {
                     .padding(horizontal = 14.dp, vertical = 8.dp),
             ) {
                 Text(
-                    if (busy) "安装中" else "安装",
+                    if (busy) "安装中" else "在线装",
                     fontSize = 12.5.sp,
                     color = if (busy) MiuixTheme.colorScheme.onSurfaceVariantSummary
                     else MiuixTheme.colorScheme.onPrimary,
                 )
             }
+            Spacer(Modifier.width(6.dp))
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+                    .clickable(enabled = !busy) { zipPicker.launch(arrayOf("*/*")) }
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+            ) {
+                Text("从文件装", fontSize = 12.5.sp)
+            }
         }
+
         if (busy) {
             Spacer(Modifier.height(6.dp))
             Box(
@@ -935,9 +979,45 @@ private fun BootstrapBar(onDone: () -> Unit) {
                 )
             }
         }
+
         error?.let {
-            Spacer(Modifier.height(4.dp))
-            Text(it, fontSize = 11.sp, color = MiuixTheme.colorScheme.error)
+            Spacer(Modifier.height(6.dp))
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MiuixTheme.colorScheme.error.copy(alpha = 0.12f))
+                    .padding(10.dp),
+            ) {
+                Text(it, fontSize = 11.sp, color = MiuixTheme.colorScheme.error)
+            }
+        }
+
+        Spacer(Modifier.height(4.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            SmallAction(if (showDiag) "收起体检" else "体检") { showDiag = !showDiag }
+            SmallAction("清掉半装的") {
+                Bootstrap.uninstall(ctx)
+                status = ""
+                error = null
+                onDone()
+            }
+        }
+        if (showDiag) {
+            Spacer(Modifier.height(6.dp))
+            Bootstrap.diagnose(ctx).forEach { (label, ok) ->
+                Text(
+                    (if (ok) "✓ " else "✗ ") + label,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = if (ok) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.error,
+                )
+            }
+            Text(
+                "缓存包：" + Bootstrap.cachedZip(ctx).absolutePath,
+                fontSize = 10.sp,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            )
         }
     }
 }

@@ -972,7 +972,7 @@ private fun BackupSection() {
                 busy = true
                 msg = null
                 scope.launch {
-                    val dir = Backup.defaultDir().let { if (it.exists()) it else File(ctx.filesDir) }
+                    val dir = Backup.defaultDir().let { if (it.exists()) it else ctx.filesDir }
                     val out = File(dir, Backup.suggestName())
                     Backup.backup(ctx, out)
                         .onSuccess { msg = "备份好了：" + it.absolutePath }
@@ -982,7 +982,7 @@ private fun BackupSection() {
             }
             SmallAction("恢复") {
                 if (busy) return@SmallAction
-                val dir = Backup.defaultDir().let { if (it.exists()) it else File(ctx.filesDir) }
+                val dir = Backup.defaultDir().let { if (it.exists()) it else ctx.filesDir }
                 val list = Backup.listBackups(dir)
                 if (list.isEmpty()) {
                     msg = "没找到备份（放在 " + dir.absolutePath + "）"

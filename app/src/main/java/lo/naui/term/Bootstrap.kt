@@ -15,72 +15,62 @@ import kotlinx.coroutines.withContext
  *
  * --- 为什么要「路径重写」---
  * termux 的二进制是照着 `$PREFIX=/data/data/com.termux/files/usr` 编的，
- * DT_RPATH 和 shebang 里全是这个硬编码路径。我们包名是 lo.naui，
- * 路径一变动态链接器就找不到 libc，什么都跑不起来。
- * 这些字符串都在 `.dynstr` 里、是 null 结尾的 —— 换成更短的新路径、
- * 后面补 \0，就能保持所有偏移不变，于是不用重编也不用改包名。
+ * shebang 和不少脚本里全是这个硬编码路径。我们包名是 lo.naui，
+ * 路径一变就找不到解释器 / 库。这些字符串在 .dynstr 和文本里都是 null 结尾的，
+ * 换成更短的新路径、后面补 \0，偏移不用动，于是不用重编也不用改包名。
  *
  * --- 为什么要有「从本地 zip 安装」---
- * 国内直连 github 经常不通，几个加速站也时好时坏。
- * 所以留一条后路：自己下好 zip，用文件选择器喂进来，一样能装。
+ * 国内直连 github 经常中途断流。断了会留下半个包，
+ * 而半个包是**打不开**的（zip 的中央目录在文件末尾）。
+ * 所以这里做三件事：下完必须能校验通过 / 缓存里的坏包自动丢掉 / 还能自己喂 zip。
  *
- * --- 安装失败最常见的原因 ---
- *  1. 下载被墙（现在有镜像轮询 + 本地 zip 两条路）
- *  2. 路径重写时把几十 MB 的文件整个读进内存 → OOM 被杀
- *     （现在只碰 8MB 以内的 ELF 和文本，且先看文件头，不是 ELF 就跳过）
- *  3. 解压出来的符号链接没重建（读 SYMLINKS.txt 补）
+ * --- 踩过的坑（都是实机反馈回来的）---
+ *  1. SYMLINKS.txt 的分隔符是**单个 `←`**（U+2190），
+ *     不是 `←→`。写错了会导致符号链接一个都建不起来。
+ *  2. 下载中断留下的残包要**校验完整性**再用，光看大小会被半个包骗过去，
+ *     表现就是一直报 "zip END header not found" 死循环。
+ *  3. 解压先落到 `usr.staging`，全部弄好再 rename 成 `usr`，
+ *     免得失败时留下一个半成品把下次安装堵死。
  */
 object Bootstrap {
 
     private const val OLD_PREFIX = "/data/data/com.termux/files/usr"
     private const val OLD_HOME = "/data/data/com.termux/files/home"
 
+    /** termux 自带的 SYMLINKS.txt 就用这一个字符分隔（源码里是 split("←")） */
+    private const val SYMLINK_SEP = "←"
+
     /**
      * 单个文件重写的上限。
-     * 老版本是「整读进内存 + 再复制一份」，bootstrap 里有 30MB+ 的数据文件，
-     * 手机上直接 OOM —— 这就是装不上/装了没反应的主因之一。
+     * 整读进内存再写回的方式，遇到 30MB+ 的文件手机上直接 OOM，
+     * 所以只碰 8MB 以内的，而且先看文件头是不是 ELF。
      */
     private const val MAX_REWRITE_BYTES = 8L * 1024 * 1024
 
-    /**
-     * 直连 + 一圈加速站。
-     *
-     * 顺序是按实测排的（本机 curl 打过一遍）：直连 / ghfast / ghproxy.net /
-     * gh-proxy / ghproxy.link 这几个是通的，后面三个时好时坏，放最后当彩票。
-     */
+    /** 一个像样的 bootstrap 至少这么多条目 */
+    private const val MIN_ZIP_ENTRIES = 50
+
+    /** 实测过的能用的源，按速度排 */
     private fun mirrors(arch: String): List<String> {
         val gh = "https://github.com/termux/termux-packages/releases/latest/download/bootstrap-$arch.zip"
         return listOf(
-            gh,
+            gh,                                  // 直连
             "https://ghfast.top/$gh",
             "https://ghproxy.net/$gh",
             "https://gh-proxy.com/$gh",
             "https://ghproxy.link/$gh",
-            "https://github.moeyy.xyz/$gh",
-            "https://gh.llkk.cc/$gh",
-            "https://hub.gitmirror.com/$gh",
         )
     }
 
-    /** 给界面用：让用户能自己复制出去用浏览器下 */
-    fun manualUrl(): String =
-        "https://github.com/termux/termux-packages/releases/latest/download/bootstrap-" + arch() + ".zip"
-
     fun prefix(ctx: Context): File = File(ctx.filesDir, "usr")
+
+    /** 解压先用它，成功了再改名成 usr */
+    private fun staging(ctx: Context): File = File(ctx.filesDir, "usr.staging")
+
     fun home(ctx: Context): File = File(ctx.filesDir, "home")
 
-    /** 装好了没 —— 宽松一点：bin 里有 bash 或者 sh 就算 */
-    fun isInstalled(ctx: Context): Boolean {
-        val bin = File(prefix(ctx), "bin")
-        if (!bin.isDirectory) return false
-        return File(bin, "bash").exists() || File(bin, "sh").exists()
-    }
+    fun cachedZip(ctx: Context): File = File(ctx.cacheDir, "bootstrap.zip")
 
-    fun installedSize(ctx: Context): Long =
-        runCatching { prefix(ctx).walkTopDown().filter { it.isFile }.sumOf { it.length() } }
-            .getOrDefault(0L)
-
-    /** 设备该下哪个架构 */
     fun arch(): String = when {
         android.os.Build.SUPPORTED_ABIS.any { it.contains("arm64") } -> "aarch64"
         android.os.Build.SUPPORTED_ABIS.any { it.contains("armeabi") } -> "arm"
@@ -88,8 +78,73 @@ object Bootstrap {
         else -> "i686"
     }
 
-    /** cache 里那份 zip 放哪 */
-    fun cachedZip(ctx: Context): File = File(ctx.cacheDir, "bootstrap.zip")
+    fun manualUrl(): String =
+        "https://github.com/termux/termux-packages/releases/latest/download/bootstrap-" + arch() + ".zip"
+
+    /* ================= 遍历 ================= */
+
+    /** 是不是符号链接 */
+    private fun isLink(f: File): Boolean =
+        runCatching { java.nio.file.Files.isSymbolicLink(f.toPath()) }.getOrDefault(false)
+
+    /**
+     * 安全地遍历。
+     *
+     * bootstrap 里有指向目录的链接（比如 bin/xxx → ../libexec），
+     * 直接 walkTopDown 会跟进去，运气不好就绕成环卡死。
+     * 所以碰到链接就不进、也不当普通文件处理。
+     */
+    private fun walkFiles(root: File): List<File> = runCatching {
+        root.walkTopDown()
+            .onEnter { dir -> dir == root || !isLink(dir) }
+            .filter { it.isFile && !isLink(it) }
+            .toList()
+    }.getOrDefault(emptyList())
+
+    /* ================= 状态判定 ================= */
+
+    fun isInstalled(ctx: Context): Boolean {
+        val bin = File(prefix(ctx), "bin")
+        if (!bin.isDirectory) return false
+        return File(bin, "bash").exists() || File(bin, "sh").exists()
+    }
+
+    /**
+     * 这个 zip 是不是一个**完整的** bootstrap。
+     *
+     * 光看大小是不够的：断流留下的半个包可能有好几 MB，
+     * 但它末尾没有中央目录，ZipFile 直接抛 "zip END header not found"。
+     * 所以这里真的去打开它，并且要求里面有 SYMLINKS.txt。
+     */
+    fun isValidZip(f: File): Boolean = runCatching {
+        if (!f.exists() || f.length() < 1024L * 1024L) return false
+        ZipFile(f).use { zf ->
+            var hasSymlinks = false
+            var count = 0
+            val e = zf.entries()
+            while (e.hasMoreElements()) {
+                val en = e.nextElement()
+                count++
+                if (en.name == "SYMLINKS.txt") hasSymlinks = true
+            }
+            hasSymlinks && count >= MIN_ZIP_ENTRIES
+        }
+    }.getOrDefault(false)
+
+    fun installedSize(ctx: Context): Long =
+        walkFiles(prefix(ctx)).sumOf { runCatching { it.length() }.getOrDefault(0L) }
+
+    fun diagnose(ctx: Context): List<Pair<String, Boolean>> {
+        val zip = cachedZip(ctx)
+        return listOf(
+            "环境已装" to isInstalled(ctx),
+            "bin/bash 在" to File(prefix(ctx), "bin/bash").exists(),
+            "bin/sh 在" to File(prefix(ctx), "bin/sh").exists(),
+            "lib 在" to File(prefix(ctx), "lib").isDirectory,
+            "缓存包存在" to zip.exists(),
+            "缓存包完整" to isValidZip(zip),
+        )
+    }
 
     /* ================= 入口 ================= */
 
@@ -99,10 +154,14 @@ object Bootstrap {
     ): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             val zip = cachedZip(ctx)
-            if (!zip.exists() || zip.length() < 1024L * 1024L) {
-                downloadAny(ctx, zip, onProgress)
+            if (isValidZip(zip)) {
+                onProgress(0.45f, "用上次下好的包（校验通过）")
             } else {
-                onProgress(0.45f, "用上次下好的包")
+                if (zip.exists()) {
+                    onProgress(0.02f, "缓存里那个包是坏的，丢掉重下")
+                    runCatching { zip.delete() }
+                }
+                downloadAny(ctx, zip, onProgress)
             }
             installFrom(ctx, zip, onProgress)
         }
@@ -115,6 +174,9 @@ object Bootstrap {
         onProgress: (Float, String) -> Unit,
     ): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
+            if (!isValidZip(src)) {
+                throw IllegalStateException("这个文件不是完整的 bootstrap zip（打不开，或者里面没有 SYMLINKS.txt）")
+            }
             val zip = cachedZip(ctx)
             runCatching { zip.delete() }
             src.copyTo(zip, overwrite = true)
@@ -122,50 +184,64 @@ object Bootstrap {
         }
     }
 
+    /* ================= 安装 ================= */
+
     private suspend fun installFrom(
         ctx: Context,
         zip: File,
         onProgress: (Float, String) -> Unit,
     ): Unit = withContext(Dispatchers.IO) {
-        val prefix = prefix(ctx)
-        val home = home(ctx)
-        home.mkdirs()
+        onProgress(0.46f, "校验压缩包")
+        if (!isValidZip(zip)) {
+            throw IllegalStateException(
+                "这个 zip 打不开，可能没下完（zip END header not found）\n" +
+                    "已经把它删了，再点一次「在线装」会重新下"
+            )
+        }
 
-        // ---- 空间检查：解压后大概要 250MB ----
+        // 空间：解压后大概 200~250MB
         val need = 300L * 1024 * 1024
         val free = runCatching { ctx.filesDir.usableSpace }.getOrDefault(Long.MAX_VALUE)
         if (free in 1 until need) {
             throw IllegalStateException(
-                "空间不够：还要约 " + (need / 1024 / 1024) + "MB，现在只剩 " + (free / 1024 / 1024) + "MB"
+                "空间不够：还要约 " + (need / 1024 / 1024) + "MB，只剩 " + (free / 1024 / 1024) + "MB"
             )
         }
 
-        onProgress(0.46f, "检查压缩包")
-        val entries = runCatching { ZipFile(zip).use { it.entries().toList() } }
-            .getOrElse { throw IllegalStateException("这个 zip 打不开，可能没下完：" + (it.message ?: "")) }
+        val stage = staging(ctx)
+        val finalPrefix = prefix(ctx)
+        stage.deleteRecursively()
+        stage.mkdirs()
 
-        // ---- 清掉旧的一半安装 ----
-        if (prefix.exists() && !isInstalled(ctx)) {
-            onProgress(0.48f, "清掉上次没装完的残留")
-            prefix.deleteRecursively()
-        }
-        prefix.mkdirs()
+        val entries = runCatching { ZipFile(zip).use { it.entries().toList() } }
+            .getOrElse { throw IllegalStateException("读不了这个 zip：" + (it.message ?: "")) }
 
         onProgress(0.50f, "解压 " + entries.size + " 个文件")
-        unzip(zip, prefix, entries) { p -> onProgress(0.50f + p * 0.30f, "解压中") }
+        unzip(zip, stage, entries) { p -> onProgress(0.50f + p * 0.28f, "解压中") }
 
-        onProgress(0.82f, "重建符号链接")
-        fixSymlinks(prefix)
+        onProgress(0.80f, "重建符号链接")
+        val links = fixSymlinks(ctx, stage)
+        if (links == 0) {
+            stage.deleteRecursively()
+            throw IllegalStateException("这个包里没有 SYMLINKS.txt —— 不是 termux 的 bootstrap")
+        }
 
-        onProgress(0.86f, "设可执行权限")
-        fixPermissions(prefix)
+        onProgress(0.84f, "就位（" + links + " 个链接）")
+        finalPrefix.deleteRecursively()
+        if (!stage.renameTo(finalPrefix)) {
+            stage.deleteRecursively()
+            throw IllegalStateException("把解压好的目录改名成 usr 失败")
+        }
+
+        onProgress(0.88f, "设可执行权限")
+        fixPermissions(finalPrefix)
 
         onProgress(0.90f, "重写内嵌路径（termux → 本应用）")
-        rewriteAll(ctx, prefix, onProgress)
+        rewriteAll(ctx, finalPrefix, onProgress)
 
         if (!isInstalled(ctx)) {
             throw IllegalStateException(
-                "解压完了但 bin/ 里没有 bash 或 sh —— 这个 zip 可能不是 termux 的 bootstrap"
+                "解压完了但 bin/ 里没有 bash 或 sh，这个包可能不对"
             )
         }
         onProgress(1f, "装好了")
@@ -176,26 +252,34 @@ object Bootstrap {
     private suspend fun downloadAny(ctx: Context, out: File, onProgress: (Float, String) -> Unit) {
         val arch = arch()
         val list = mirrors(arch)
-        var last: String? = null
+        var last = ""
 
         list.forEachIndexed { i, url ->
-            val host = url.substringAfter("//").substringBefore('/').take(28)
-            onProgress(0.02f, "试第 " + (i + 1) + "/" + list.size + " 个源：" + host)
-            val r = runCatching {
-                download(url, out) { p ->
-                    onProgress(0.02f + p * 0.42f, "下载中 " + host + " " + (p * 100).toInt() + "%")
+            val host = url.substringAfter("//").substringBefore('/').take(26)
+            // 同一个源试两次，网络抖一下不至于直接放弃
+            repeat(2) { attempt ->
+                onProgress(0.02f, "试第 " + (i + 1) + "/" + list.size + " 个源：" + host +
+                    if (attempt == 1) "（重试）" else "")
+                val r = runCatching {
+                    download(url, out) { p ->
+                        onProgress(0.02f + p * 0.42f, "下载中 " + host + " " + (p * 100).toInt() + "%")
+                    }
+                    if (!isValidZip(out)) {
+                        throw IllegalStateException("下到的是坏包（多半中途断流了）")
+                    }
                 }
+                if (r.isSuccess) return
+                last = host + "：" + (r.exceptionOrNull()?.message ?: "")
+                runCatching { out.delete() }
             }
-            if (r.isSuccess) return
-            last = host + "：" + (r.exceptionOrNull()?.message ?: "")
-            runCatching { out.delete() }
         }
+
         throw IllegalStateException(
-            "所有镜像都没下下来（最后试的是 " + last + "）\n" +
+            "所有源都没下成功（最后试的是 " + last + "）\n\n" +
                 "两个办法：\n" +
-                "1) 用浏览器打开下面这个地址下好 zip，再用「从文件装」选它：\n" +
-                manualUrl() + "\n" +
-                "2) 或者直接放到这个路径，再点「在线装」：\n" +
+                "① 用浏览器打开下面这个地址，下好 zip，再点「从文件装」选它：\n" +
+                manualUrl() + "\n\n" +
+                "② 或者把 zip 放到这个路径，再点「在线装」：\n" +
                 cachedZip(ctx).absolutePath
         )
     }
@@ -203,7 +287,7 @@ object Bootstrap {
     private fun download(url: String, out: File, onProgress: (Float) -> Unit) {
         val conn = (URL(url).openConnection() as HttpURLConnection).apply {
             connectTimeout = 12_000
-            readTimeout = 45_000
+            readTimeout = 40_000
             instanceFollowRedirects = true
             setRequestProperty("User-Agent", "Nakour")
         }
@@ -212,12 +296,13 @@ object Bootstrap {
             conn.disconnect()
             throw IllegalStateException("HTTP " + code)
         }
-        val total = conn.contentLengthLong.takeIf { it > 0 } ?: (40L * 1024 * 1024)
+        val total = conn.contentLengthLong.takeIf { it > 0 } ?: (33L * 1024 * 1024)
         out.parentFile?.mkdirs()
+        var done = 0L
+
         conn.inputStream.use { input ->
             FileOutputStream(out).use { output ->
                 val buf = ByteArray(256 * 1024)
-                var done = 0L
                 while (true) {
                     val n = input.read(buf)
                     if (n <= 0) break
@@ -228,8 +313,14 @@ object Bootstrap {
             }
         }
         conn.disconnect()
+
+        // 断流时 read 会返回 -1，看起来像"正常结束"——
+        // 所以这里必须拿实际字节数跟声明的大小比一次
+        if (total > 0 && done < total - 1024) {
+            throw IllegalStateException("下到 " + (done / 1024 / 1024) + "MB 就断了（应为 " + (total / 1024 / 1024) + "MB）")
+        }
         if (out.length() < 1024L * 1024L) {
-            throw IllegalStateException("下下来才 " + (out.length() / 1024) + "KB，不是 bootstrap")
+            throw IllegalStateException("只有 " + (out.length() / 1024) + "KB，不是 bootstrap")
         }
     }
 
@@ -271,37 +362,55 @@ object Bootstrap {
 
     /* ================= 符号链接 ================= */
 
-    private fun fixSymlinks(prefix: File) {
-        val f = File(prefix, "SYMLINKS.txt")
-        if (!f.exists()) return
+    /**
+     * 读 SYMLINKS.txt 补符号链接，返回建了几个。
+     *
+     * **分隔符是单个 `←`**（termux 源码里就是 `line.split("←")`）。
+     * 这里同时把目标里的旧前缀换成我们的最终路径 —— 因为马上要把
+     * staging 改名成 usr，链接得提前指向最终位置。
+     */
+    private fun fixSymlinks(ctx: Context, stage: File): Int {
+        val f = File(stage, "SYMLINKS.txt")
+        if (!f.exists()) return 0
+        val finalPrefix = prefix(ctx).absolutePath
+        val finalHome = home(ctx).absolutePath
+        var made = 0
+
         runCatching {
             f.readLines().forEach { line ->
-                val parts = line.split("←→")
+                if (line.isBlank()) return@forEach
+                val parts = line.split(SYMLINK_SEP)
                 if (parts.size != 2) return@forEach
-                val target = parts[0]
-                val link = File(prefix, parts[1])
+                val rawTarget = parts[0].trim()
+                val linkRel = parts[1].trim()
+                if (linkRel.isBlank()) return@forEach
+
+                val target = rawTarget.replace(OLD_PREFIX, finalPrefix).replace(OLD_HOME, finalHome)
+                val link = File(stage, linkRel)
                 link.parentFile?.mkdirs()
                 runCatching {
                     if (link.exists()) link.delete()
                     Os.symlink(target, link.absolutePath)
+                    made++
                 }
             }
             f.delete()
         }
+        return made
     }
 
     /* ================= 权限 ================= */
 
     private fun fixPermissions(prefix: File) {
-        val execDirs = listOf("bin", "libexec", "libexec/termux-am")
-        execDirs.forEach { d ->
+        listOf("bin", "libexec", "libexec/termux-am").forEach { d ->
             File(prefix, d).listFiles()?.forEach { f ->
                 runCatching { Os.chmod(f.absolutePath, 0b111101101) }   // 0755
             }
         }
-        prefix.walkTopDown().filter { it.isDirectory }.forEach {
-            runCatching { Os.chmod(it.absolutePath, 0b111101101) }
-        }
+        prefix.walkTopDown()
+            .onEnter { dir -> dir == prefix || !isLink(dir) }
+            .filter { it.isDirectory && !isLink(it) }
+            .forEach { runCatching { Os.chmod(it.absolutePath, 0b111101101) } }
         File(prefix, "lib").listFiles()?.forEach {
             runCatching { Os.chmod(it.absolutePath, 0b110100100) }      // 0644
         }
@@ -312,12 +421,11 @@ object Bootstrap {
     private suspend fun rewriteAll(ctx: Context, prefix: File, onProgress: (Float, String) -> Unit) {
         val newPrefix = prefix.absolutePath
         val newHome = home(ctx).absolutePath
-
-        val files = runCatching {
-            prefix.walkTopDown().filter { it.isFile }.toList()
-        }.getOrDefault(emptyList())
-
         val oldPrefixBytes = OLD_PREFIX.toByteArray(Charsets.UTF_8)
+        val oldHomeBytes = OLD_HOME.toByteArray(Charsets.UTF_8)
+
+        val files = walkFiles(prefix)
+
         var touched = 0
         var skippedBig = 0
         var i = 0
@@ -325,10 +433,7 @@ object Bootstrap {
         files.forEach { f ->
             i++
             if (i % 60 == 0) {
-                onProgress(
-                    0.90f + 0.09f * i / files.size.coerceAtLeast(1),
-                    "重写路径 " + i + "/" + files.size
-                )
+                onProgress(0.90f + 0.09f * i / files.size.coerceAtLeast(1), "重写路径 " + i + "/" + files.size)
             }
             val len = runCatching { f.length() }.getOrDefault(0L)
             if (len <= 0L) return@forEach
@@ -343,61 +448,60 @@ object Bootstrap {
             }.getOrDefault(false)
 
             if (isElf) {
-                if (rewriteBinary(f, oldPrefixBytes, newPrefix, OLD_HOME.toByteArray(), newHome)) touched++
+                if (rewriteBinary(f, oldPrefixBytes, newPrefix, oldHomeBytes, newHome)) touched++
             } else {
                 if (rewriteText(f, newPrefix, newHome)) touched++
             }
         }
 
-        onProgress(0.995f, "改过 " + touched + " 个文件" + if (skippedBig > 0) "（跳过 " + skippedBig + " 个大文件）" else "")
+        onProgress(0.998f, "改过 " + touched + " 个文件" + if (skippedBig > 0) "（跳过 " + skippedBig + " 个大文件）" else "")
     }
 
-    /**
-     * 二进制原地替换：新路径更短，后面补 \0。
-     * 文件长度不变，ELF 里所有偏移都不用动。
-     */
-    private fun rewriteBinary(file: File, oldPrefix: ByteArray, newPrefix: String, oldHome: ByteArray, newHome: String): Boolean {
-        return runCatching {
-            val bytes = file.readBytes()
-            var changed = false
+    /** 二进制原地替换：新路径更短，后面补 \0，文件长度不变 */
+    private fun rewriteBinary(
+        file: File,
+        oldPrefix: ByteArray,
+        newPrefix: String,
+        oldHome: ByteArray,
+        newHome: String,
+    ): Boolean = runCatching {
+        val bytes = file.readBytes()
+        var changed = false
 
-            fun patch(old: ByteArray, new: String) {
-                val nb = new.toByteArray(Charsets.UTF_8)
-                if (nb.size > old.size) return                  // 新路径更长就放弃，免得踩坏偏移
-                val padded = ByteArray(old.size)
-                System.arraycopy(nb, 0, padded, 0, nb.size)
-                var idx = indexOf(bytes, old)
-                while (idx >= 0) {
-                    System.arraycopy(padded, 0, bytes, idx, old.size)
-                    changed = true
-                    idx = indexOf(bytes, old, idx + old.size)
-                }
+        fun patch(old: ByteArray, new: String) {
+            val nb = new.toByteArray(Charsets.UTF_8)
+            if (nb.size > old.size) return
+            val padded = ByteArray(old.size)
+            System.arraycopy(nb, 0, padded, 0, nb.size)
+            var idx = indexOf(bytes, old)
+            while (idx >= 0) {
+                System.arraycopy(padded, 0, bytes, idx, old.size)
+                changed = true
+                idx = indexOf(bytes, old, idx + old.size)
             }
+        }
 
-            patch(oldPrefix, newPrefix)
-            patch(oldHome, newHome)
+        patch(oldPrefix, newPrefix)
+        patch(oldHome, newHome)
 
-            if (changed) file.writeBytes(bytes)
-            changed
-        }.getOrDefault(false)
-    }
+        if (changed) file.writeBytes(bytes)
+        changed
+    }.getOrDefault(false)
 
-    /** 纯文本（shebang / 配置）直接整串替换，这些不用保长度 */
-    private fun rewriteText(file: File, newPrefix: String, newHome: String): Boolean {
-        return runCatching {
-            val len = file.length()
-            if (len <= 0L || len > 2L * 1024 * 1024) return false
+    /** 纯文本（shebang / 配置）整串替换，这些不用保长度 */
+    private fun rewriteText(file: File, newPrefix: String, newHome: String): Boolean = runCatching {
+        val len = file.length()
+        if (len <= 0L || len > 2L * 1024 * 1024) return false
 
-            val probe = ByteArray(minOf(256, len.toInt()))
-            file.inputStream().use { it.read(probe) }
-            if (probe.any { it == 0.toByte() }) return false    // 带 NUL 的当二进制看
+        val probe = ByteArray(minOf(256, len.toInt()))
+        file.inputStream().use { it.read(probe) }
+        if (probe.any { it == 0.toByte() }) return false
 
-            val text = file.readText()
-            if (!text.contains(OLD_PREFIX) && !text.contains(OLD_HOME)) return false
-            file.writeText(text.replace(OLD_PREFIX, newPrefix).replace(OLD_HOME, newHome))
-            true
-        }.getOrDefault(false)
-    }
+        val text = file.readText()
+        if (!text.contains(OLD_PREFIX) && !text.contains(OLD_HOME)) return false
+        file.writeText(text.replace(OLD_PREFIX, newPrefix).replace(OLD_HOME, newHome))
+        true
+    }.getOrDefault(false)
 
     private fun indexOf(data: ByteArray, pattern: ByteArray, from: Int = 0): Int {
         if (pattern.isEmpty() || data.size < pattern.size) return -1
@@ -436,12 +540,16 @@ object Bootstrap {
     fun shellPath(ctx: Context): String =
         if (isInstalled(ctx)) File(prefix(ctx), "bin/bash").absolutePath else "/system/bin/sh"
 
+    fun uninstall(ctx: Context): Boolean = runCatching {
+        prefix(ctx).deleteRecursively() and staging(ctx).deleteRecursively()
+    }.getOrDefault(false)
+
     /* ================= 换源 ================= */
 
     data class Mirror(val id: String, val label: String, val url: String)
 
     val MIRRORS = listOf(
-        Mirror("official", "官方（packages.termux.dev）", "https://packages.termux.dev/apt/termux-main"),
+        Mirror("official", "官方", "https://packages.termux.dev/apt/termux-main"),
         Mirror("tuna", "清华", "https://mirrors.tuna.tsinghua.edu.cn/termux/apt/termux-main"),
         Mirror("ustc", "中科大", "https://mirrors.ustc.edu.cn/termux/apt/termux-main"),
         Mirror("bfsu", "北外", "https://mirrors.bfsu.edu.cn/termux/apt/termux-main"),
@@ -450,29 +558,33 @@ object Bootstrap {
         Mirror("zju", "浙大", "https://mirrors.zju.edu.cn/termux/apt/termux-main"),
     )
 
-    /** 写 sources.list，顺手把 root 源也带上 */
     suspend fun setMirror(ctx: Context, mirror: Mirror): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             val etc = File(prefix(ctx), "etc/apt").apply { mkdirs() }
-            File(etc, "sources.list").writeText(
-                "deb " + mirror.url + " stable main\n"
-            )
-            // termux 的源里还有 root 和 x11 两个仓库，有就配上
-            val rootUrl = mirror.url.replace("termux-main", "termux-root")
+            File(etc, "sources.list").writeText("deb " + mirror.url + " stable main\n")
             File(etc, "sources.list.d").mkdirs()
-            File(etc, "sources.list.d/root.list").writeText("deb " + rootUrl + " root stable\n")
+            File(etc, "sources.list.d/root.list").writeText(
+                "deb " + mirror.url.replace("termux-main", "termux-root") + " root stable\n"
+            )
         }
     }
 
-    fun uninstall(ctx: Context): Boolean =
-        runCatching { prefix(ctx).deleteRecursively() }.getOrDefault(false)
-
-    /** 自己体检一下，给界面显示 */
-    fun diagnose(ctx: Context): List<Pair<String, Boolean>> = listOf(
-        "环境已装" to isInstalled(ctx),
-        "bin/bash 在" to File(prefix(ctx), "bin/bash").exists(),
-        "bin/sh 在" to File(prefix(ctx), "bin/sh").exists(),
-        "lib 在" to File(prefix(ctx), "lib").isDirectory,
-        "缓存里有包" to cachedZip(ctx).exists(),
-    )
+    /** 直接拿它跑一条命令，用来验证环境到底能不能用 */
+    suspend fun selfTest(ctx: Context): String = withContext(Dispatchers.IO) {
+        if (!isInstalled(ctx)) return@withContext "环境没装"
+        val bash = File(prefix(ctx), "bin/bash").absolutePath
+        val env = environ(ctx)
+        runCatching {
+            val pb = ProcessBuilder(bash, "-c", "echo OK; uname -m; echo \$PREFIX")
+            pb.environment().clear()
+            env.forEach { kv ->
+                val i = kv.indexOf('=')
+                if (i > 0) pb.environment()[kv.substring(0, i)] = kv.substring(i + 1)
+            }
+            val p = pb.redirectErrorStream(true).start()
+            val out = p.inputStream.bufferedReader().readText()
+            p.waitFor()
+            out
+        }.getOrElse { "跑不起来：" + (it.message ?: it.javaClass.simpleName) }
+    }
 }

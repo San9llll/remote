@@ -935,6 +935,7 @@ private fun BootstrapBar(onDone: () -> Unit) {
     var status by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var showDiag by remember { mutableStateOf(false) }
+    var selfTest by remember { mutableStateOf<String?>(null) }
 
     // 网络下不来的时候，自己下好 zip 从这儿喂进来
     val zipPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -1056,13 +1057,42 @@ private fun BootstrapBar(onDone: () -> Unit) {
         Spacer(Modifier.height(4.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             SmallAction(if (showDiag) "收起体检" else "体检") { showDiag = !showDiag }
+            SmallAction("自检") {
+                scope.launch {
+                    status = "正在跑 bash…"
+                    error = null
+                    val r = Bootstrap.selfTest(ctx)
+                    status = "自检结果"
+                    error = null
+                    selfTest = r
+                }
+            }
             SmallAction("清掉半装的") {
                 Bootstrap.uninstall(ctx)
                 status = ""
                 error = null
+                selfTest = null
                 onDone()
             }
         }
+        selfTest?.let {
+            Spacer(Modifier.height(6.dp))
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+                    .padding(10.dp),
+            ) {
+                Text(
+                    "bash 自检：\n" + it,
+                    fontSize = 10.5.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = MiuixTheme.colorScheme.onSurface,
+                )
+            }
+        }
+
         if (showDiag) {
             Spacer(Modifier.height(6.dp))
             Bootstrap.diagnose(ctx).forEach { (label, ok) ->

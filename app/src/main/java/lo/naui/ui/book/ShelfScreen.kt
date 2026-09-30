@@ -1,7 +1,10 @@
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+
 package lo.naui.ui.book
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,6 +18,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -61,6 +66,7 @@ fun ShelfScreen(
 
     var books by remember { mutableStateOf<List<Book>>(emptyList()) }
     var tick by remember { mutableStateOf(0) }
+    var deleteTarget by remember { mutableStateOf<Book?>(null) }
 
     LaunchedEffect(tick) {
         books = withContext(Dispatchers.IO) { BookStore.list() }
@@ -80,13 +86,75 @@ fun ShelfScreen(
             Spacer(Modifier.height(14.dp))
         }
 
+        deleteTarget?.let { target ->
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.45f))
+                    .clickable { deleteTarget = null },
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(
+                    Modifier
+                        .padding(horizontal = 28.dp)
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(MiuixTheme.colorScheme.surface)
+                        .clickable(enabled = false) { }
+                        .padding(20.dp),
+                ) {
+                    Text("删掉这本书？", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "《" + target.title + "》和它的 " + target.chapters.size +
+                            " 章正文、朗读音频都会一起删掉，删了拿不回来",
+                        fontSize = 12.sp,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Box(
+                            Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(50))
+                                .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+                                .clickable { deleteTarget = null }
+                                .padding(vertical = 11.dp),
+                            contentAlignment = Alignment.Center,
+                        ) { Text("算了", fontSize = 13.sp) }
+                        Box(
+                            Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(50))
+                                .background(MiuixTheme.colorScheme.error.copy(alpha = 0.16f))
+                                .clickable {
+                                    val t = target
+                                    deleteTarget = null
+                                    BookStore.delete(ctx, t.id)
+                                    tick++
+                                }
+                                .padding(vertical = 11.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text("删掉", fontSize = 13.sp, color = MiuixTheme.colorScheme.error)
+                        }
+                    }
+                }
+            }
+        }
+
         LazyColumn(
             Modifier.weight(1f).fillMaxWidth(),
             contentPadding = PaddingValues(start = 14.dp, end = 14.dp, bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             items(books, key = { it.id }) { book ->
-                BookRow(book, backdrop) { onOpenBook(book.id) }
+                BookRow(
+                    book = book,
+                    backdrop = backdrop,
+                    onClick = { onOpenBook(book.id) },
+                    onLongClick = { deleteTarget = book },
+                )
             }
 
             // 最下面那个单独的 +
@@ -130,13 +198,14 @@ private fun BookRow(
     book: Book,
     backdrop: com.kyant.backdrop.Backdrop?,
     onClick: () -> Unit,
+    onLongClick: () -> Unit = {},
 ) {
     GlassCard(
         backdrop = backdrop,
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(18.dp))
-            .clickable { onClick() },
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
         contentPadding = 16.dp,
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {

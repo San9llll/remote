@@ -181,6 +181,41 @@ fun ReaderScreen(
         }
     }
 
+    /** 让 AI 接着写下一章 */
+    fun generateNextChapter() {
+        val b0 = book ?: return
+        scope.launch {
+            generating = "AI 正在写下一章…"
+            hint = null
+            val text = BookAi.generateNext(b0).getOrElse {
+                generating = ""
+                hint = "生成失败：" + (it.message ?: "")
+                return@launch
+            }
+
+            // 第一行如果像标题（含"第X章"而且不长），就摘出来当章名
+            val lines = text.trim().lines()
+            var title = ""
+            var body = text.trim()
+            if (lines.size > 1) {
+                val head = lines[0].trim().trimStart('#').trim()
+                if (head.length <= 30 && (head.contains("章") || head.contains("Chapter"))) {
+                    title = head
+                    body = lines.drop(1).joinToString("\n").trim()
+                }
+            }
+            if (title.isBlank()) title = "第" + (b0.chapters.size + 1) + "章"
+
+            val next = BookChapter(index = b0.chapters.size, title = title, content = body)
+            val nb = b0.copy(chapters = b0.chapters + next, updatedAt = System.currentTimeMillis())
+            withContext(Dispatchers.IO) { BookStore.save(nb) }
+            book = nb
+            chapterIndex = nb.chapters.size - 1
+            generating = ""
+            onChanged()
+        }
+    }
+
     val b = book ?: return
     val ch = current
 
@@ -321,9 +356,18 @@ fun ReaderScreen(
                 )
             }
 
-            ChapterButton("下一章", enabled = book!!.chapters.size > chapterIndex + 1) {
-                stop()
-                chapterIndex++
+            val hasNext = book!!.chapters.size > chapterIndex + 1
+            ChapterButton(
+                label = if (hasNext) "下一章" else "生成下一章",
+                enabled = hasNext || generating.isBlank(),
+                highlight = !hasNext,
+            ) {
+                if (hasNext) {
+                    stop()
+                    chapterIndex++
+                } else {
+                    generateNextChapter()
+                }
             }
         }
     }
@@ -392,13 +436,21 @@ private fun FlatButton(label: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun ChapterButton(label: String, enabled: Boolean, onClick: () -> Unit) {
+private fun ChapterButton(
+    label: String,
+    enabled: Boolean,
+    highlight: Boolean = false,
+    onClick: () -> Unit,
+) {
     Box(
         Modifier
             .clip(RoundedCornerShape(50))
             .background(
-                if (enabled) MiuixTheme.colorScheme.surfaceContainerHigh
-                else Color.Transparent
+                when {
+                    !enabled -> Color.Transparent
+                    highlight -> MiuixTheme.colorScheme.primary.copy(alpha = 0.16f)
+                    else -> MiuixTheme.colorScheme.surfaceContainerHigh
+                }
             )
             .clickable(enabled = enabled) { onClick() }
             .padding(horizontal = 16.dp, vertical = 9.dp),
@@ -406,8 +458,11 @@ private fun ChapterButton(label: String, enabled: Boolean, onClick: () -> Unit) 
         Text(
             label,
             fontSize = 13.sp,
-            color = if (enabled) MiuixTheme.colorScheme.onSurface
-            else MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.5f),
+            color = when {
+                !enabled -> MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.5f)
+                highlight -> MiuixTheme.colorScheme.primary
+                else -> MiuixTheme.colorScheme.onSurface
+            },
         )
     }
 }

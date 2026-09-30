@@ -48,12 +48,16 @@ class TerminalSession(
     var onOutput: (() -> Unit)? = null
     var onExit: (() -> Unit)? = null
 
+    /** 进程响了铃（\a） */
+    var onBell: (() -> Unit)? = null
+
     /** 终端窗口多大（像素），resize 时一起告诉内核 */
     var cellWidthPx: Int = 0
     var cellHeightPx: Int = 0
 
     fun start(): Boolean {
         if (running) return true
+        emulator.onBell = { onBell?.invoke() }
         val pidOut = IntArray(1)
         val fd = try {
             TerminalNative.createSubprocess(

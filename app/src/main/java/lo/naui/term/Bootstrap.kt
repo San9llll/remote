@@ -423,6 +423,34 @@ object Bootstrap {
     fun shellPath(ctx: Context): String =
         if (isInstalled(ctx)) File(prefix(ctx), "bin/bash").absolutePath else "/system/bin/sh"
 
+    /* ================= 换源 ================= */
+
+    data class Mirror(val id: String, val label: String, val url: String)
+
+    val MIRRORS = listOf(
+        Mirror("official", "官方（packages.termux.dev）", "https://packages.termux.dev/apt/termux-main"),
+        Mirror("tuna", "清华", "https://mirrors.tuna.tsinghua.edu.cn/termux/apt/termux-main"),
+        Mirror("ustc", "中科大", "https://mirrors.ustc.edu.cn/termux/apt/termux-main"),
+        Mirror("bfsu", "北外", "https://mirrors.bfsu.edu.cn/termux/apt/termux-main"),
+        Mirror("nju", "南大", "https://mirror.nju.edu.cn/termux/apt/termux-main"),
+        Mirror("sjtu", "上交", "https://mirror.sjtu.edu.cn/termux/apt/termux-main"),
+        Mirror("zju", "浙大", "https://mirrors.zju.edu.cn/termux/apt/termux-main"),
+    )
+
+    /** 写 sources.list，顺手把 root 源也带上 */
+    suspend fun setMirror(ctx: Context, mirror: Mirror): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val etc = File(prefix(ctx), "etc/apt").apply { mkdirs() }
+            File(etc, "sources.list").writeText(
+                "deb " + mirror.url + " stable main\n"
+            )
+            // termux 的源里还有 root 和 x11 两个仓库，有就配上
+            val rootUrl = mirror.url.replace("termux-main", "termux-root")
+            File(etc, "sources.list.d").mkdirs()
+            File(etc, "sources.list.d/root.list").writeText("deb " + rootUrl + " root stable\n")
+        }
+    }
+
     fun uninstall(ctx: Context): Boolean =
         runCatching { prefix(ctx).deleteRecursively() }.getOrDefault(false)
 

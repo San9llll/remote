@@ -4,6 +4,9 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.os.Build
+import android.os.VibrationEffect
+import android.os.Vibrator
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -47,7 +50,11 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.geometry.getDistance
+import androidx.compose.ui.input.pointer.awaitEachGesture
+import androidx.compose.ui.input.pointer.awaitFirstDown
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -93,6 +100,13 @@ fun TerminalScreen(onBack: () -> Unit) {
 
     val home = remember { File(ctx.filesDir, "home").apply { mkdirs() }.absolutePath }
     val env = remember { TerminalSession.defaultEnv(ctx.filesDir) }
+
+    // 终端开着的时候别锁屏
+    val view = LocalView.current
+    DisposableEffect(TerminalSettings.keepScreenOn) {
+        view.keepScreenOn = TerminalSettings.keepScreenOn
+        onDispose { view.keepScreenOn = false }
+    }
 
     val installed = Bootstrap.isInstalled(ctx)
 
@@ -267,6 +281,26 @@ private fun TerminalPage(
         }
     }
 
+    // ---- 进程响铃就震一下 ----
+    val vibrator = remember {
+        ctx.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+    }
+    DisposableEffect(session) {
+        session.onBell = {
+            if (TerminalSettings.bellVibrate && vibrator?.hasVibrator() == true) {
+                runCatching {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        vibrator.vibrate(VibrationEffect.createOneShot(35L, 90))
+                    } else {
+                        @Suppress("DEPRECATION")
+                        vibrator.vibrate(35L)
+                    }
+                }
+            }
+        }
+        onDispose { session.onBell = null }
+    }
+
     fun cellAt(offset: Offset): Int {
         if (cellW <= 0f || cellH <= 0f) return -1
         val col = (offset.x / cellW).toInt().coerceIn(0, emu.cols - 1)
@@ -303,6 +337,33 @@ private fun TerminalPage(
                 .clip(RoundedCornerShape(12.dp))
                 .background(Color(scheme.bg))
                 .onSizeChanged { box = it }
+                // 双指缩放字号 —— 只在两指时吃事件，单指的不碰，
+                // 所以下面的长按选区和上下拖滚动都还照常
+                .pointerInput(Unit) {
+                    awaitEachGesture {
+                        awaitFirstDown(requireUnconsumed = false)
+                        var lastSpan = 0f
+                        var zooming = false
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val pressed = event.changes.filter { it.pressed }
+                            if (pressed.isEmpty()) break
+                            if (pressed.size >= 2) {
+                                val span = (pressed[0].position - pressed[1].position).getDistance()
+                                if (zooming && lastSpan > 1f && span > 1f) {
+                                    val factor = span / lastSpan
+                                    if (factor != 1f) {
+                                        TerminalSettings.updateFontSize(TerminalSettings.fontSize * factor)
+                                        onTick()
+                                    }
+                                }
+                                lastSpan = span
+                                zooming = true
+                                pressed.forEach { it.consume() }
+                            }
+                        }
+                    }
+                }
                 .pointerInput(emu.cols, emu.rows, cellW, cellH) {
                     detectTapGestures { pos ->
                         if (selection.isNotEmpty()) {
@@ -1083,6 +1144,29 @@ private fun BackupSection() {
                 msg = "已删掉 files/usr"
             }
         }
+        // ---- apt 源 ----
+        Spacer(Modifier.height(12.dp))
+        Text(
+            "apt 源（装完环境才有用）",
+            fontSize = 11.5.sp,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+        )
+        Spacer(Modifier.height(6.dp))
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Bootstrap.MIRRORS.forEach { m ->
+                SmallAction(m.label) {
+                    scope.launch {
+                        Bootstrap.setMirror(ctx, m)
+                            .onSuccess { msg = "源换成了：" + m.label + "（pkg update 生效）" }
+                            .onFailure { msg = "换源失败：" + it.message }
+                    }
+                }
+            }
+        }
+
         msg?.let {
             Spacer(Modifier.height(6.dp))
             Text(it, fontSize = 11.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)

@@ -114,6 +114,9 @@ class TerminalEmulator(
     /** 界面要显示的东西变了 */
     var onChange: (() -> Unit)? = null
 
+    /** 收到 BEL（\a）时叫一声 —— 界面拿它去震动 */
+    var onBell: (() -> Unit)? = null
+
     /* ---------------- 解析状态 ---------------- */
 
     private var state = GROUND
@@ -166,7 +169,7 @@ class TerminalEmulator(
                 0x0A, 0x0B, 0x0C -> lineFeed()
                 0x09 -> tab()
                 0x08 -> if (cursorCol > 0) { cursorCol--; wrapPending = false }
-                0x07 -> Unit
+                0x07 -> onBell?.invoke()
                 else -> if (b >= 0x20 && b != 0x7F) emitChar(b)
             }
 

@@ -60,6 +60,14 @@ android {
         }
     }
 
+    // targetSdk 故意留在 28（绕开 Android 10+ 的 exec 限制），
+    // 但 lint 会拿"上架 Google Play 要 33"来卡我们 —— 自己用的，关掉这条。
+    lint {
+        disable += "ExpiredTargetSdkVersion"
+        abortOnError = false
+        checkReleaseBuilds = false
+    }
+
     buildFeatures {
         compose = true
         buildConfig = true

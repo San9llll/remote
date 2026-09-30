@@ -20,9 +20,12 @@ android {
     defaultConfig {
         applicationId = "lo.naui"
         minSdk = 26
-        targetSdk = 36
-        versionCode = 12
-        versionName = "0.12.0"
+        // 故意留在 28：Android 10 起，targetSdk>=29 的 app 禁止 exec 自己的数据目录，
+        // 那 termux 的二进制（全在 $PREFIX/bin 下）就一个都跑不起来。
+        // termux 官方也是这么绕的，代价是上不了 Play。
+        targetSdk = 28
+        versionCode = 13
+        versionName = "0.13.0"
 
         // 只打 arm64-v8a。
         // 一来机器就是 arm64，多带别的 ABI 纯属白占体积；

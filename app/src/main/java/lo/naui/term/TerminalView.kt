@@ -35,6 +35,8 @@ fun TerminalCanvas(
     fgDefault: Int,
     bgDefault: Int,
     cursorColor: Int,
+    /** 识别到的链接要不要画下划线 */
+    showUrls: Boolean,
     /** 选中的格子（row*cols+col，只算当前屏） */
     selection: Set<Int>,
     modifier: Modifier = Modifier,
@@ -151,6 +153,18 @@ fun TerminalCanvas(
                     )
                 }
                 c = end + 1
+            }
+
+            // ---- 这一行里的链接画条下划线 ----
+            if (showUrls) {
+                emulator.urlsIn(line).forEach { (range, _) ->
+                    drawLine(
+                        color = Color(cursorColor).copy(alpha = 0.85f),
+                        start = Offset(range.first * cellW, y + cellH - 1.5f),
+                        end = Offset((range.last + 1) * cellW, y + cellH - 1.5f),
+                        strokeWidth = 1.5f,
+                    )
+                }
             }
         }
 

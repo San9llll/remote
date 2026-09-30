@@ -38,6 +38,9 @@ class TerminalEmulator(
         /** 宽字符（中文那种占两格）的第二格，用这个占位 */
         const val WIDE_TAIL = '\u0000'
 
+        private val URL_REGEX =
+            Regex("(?:https?|ftp)://[^\\s\"'<>\\^`{|}]+")
+
         private const val GROUND = 0
         private const val ESC = 1
         private const val CSI = 2
@@ -681,6 +684,21 @@ class TerminalEmulator(
 
     /** 历史 + 当前屏，一共多少行 */
     fun totalLines(): Int = scrollback.size + rows
+
+    /**
+     * 把一行里的 URL 都找出来（连同它占的列范围）。
+     * 渲染时给它们画下划线，点的时候拿它判断点没点中。
+     */
+    fun urlsIn(line: TerminalLine): List<Pair<IntRange, String>> {
+        val sb = StringBuilder(line.cols)
+        for (i in 0 until line.cols) {
+            val ch = line.text[i]
+            sb.append(if (ch == WIDE_TAIL || ch == '\u0000') ' ' else ch)
+        }
+        val text = sb.toString()
+        if (!text.contains("://")) return emptyList()
+        return URL_REGEX.findAll(text).map { it.range to it.value }.toList()
+    }
 
     /** 按"整条时间线"取一行：0 是最早的历史，最后是当前屏最后一行 */
     fun lineAt(index: Int): TerminalLine? {

@@ -8,6 +8,7 @@ import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -56,6 +57,8 @@ import java.io.File
 import kotlinx.coroutines.launch
 import lo.naui.sys.PrivLevel
 import lo.naui.sys.Privilege
+import lo.naui.term.Backup
+import lo.naui.term.Bootstrap
 import lo.naui.term.ColorSchemes
 import lo.naui.term.ExtraKey
 import lo.naui.term.ExtraKeys
@@ -89,10 +92,12 @@ fun TerminalScreen(onBack: () -> Unit) {
     val home = remember { File(ctx.filesDir, "home").apply { mkdirs() }.absolutePath }
     val env = remember { TerminalSession.defaultEnv(ctx.filesDir) }
 
+    val installed = Bootstrap.isInstalled(ctx)
+
     fun makeSession(): TerminalSession = TerminalSession(
-        shellPath = "/system/bin/sh",
-        cwd = home,
-        env = env,
+        shellPath = Bootstrap.shellPath(ctx),
+        cwd = if (installed) Bootstrap.home(ctx).absolutePath else home,
+        env = if (installed) Bootstrap.environ(ctx) else env,
         rows = 24,
         cols = 80,
         palette = scheme.palette,
@@ -143,6 +148,12 @@ fun TerminalScreen(onBack: () -> Unit) {
             },
             onBack = onBack,
         )
+
+        // 没装 Termux 环境就先引导装
+        if (!installed) {
+            BootstrapBar(onDone = { tick++ })
+            Spacer(Modifier.height(2.dp))
+        }
 
         // 会话条：点一下切，长按关掉
         if (sessions.size > 1) {
@@ -290,11 +301,32 @@ private fun TerminalPage(
                 .clip(RoundedCornerShape(12.dp))
                 .background(Color(scheme.bg))
                 .onSizeChanged { box = it }
-                .clickable {
-                    if (selection.isNotEmpty()) {
-                        selection = emptySet()
-                    } else {
-                        runCatching { focus.requestFocus() }
+                .pointerInput(emu.cols, emu.rows, cellW, cellH) {
+                    detectTapGestures { pos ->
+                        if (selection.isNotEmpty()) {
+                            selection = emptySet()
+                            return@detectTapGestures
+                        }
+                        val col = if (cellW > 0f) (pos.x / cellW).toInt() else -1
+                        val row = if (cellH > 0f) (pos.y / cellH).toInt() else -1
+                        if (col < 0 || row < 0 || row >= emu.rows) {
+                            runCatching { focus.requestFocus() }
+                            return@detectTapGestures
+                        }
+                        val line = emu.lineAt(emu.totalLines() - emu.rows + row)
+                        val hit = if (line != null && TerminalSettings.openUrls) {
+                            emu.urlsIn(line).firstOrNull { col in it.first }
+                        } else null
+                        if (hit != null) {
+                            runCatching {
+                                ctx.startActivity(
+                                    Intent(Intent.ACTION_VIEW, Uri.parse(hit.second))
+                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                )
+                            }
+                        } else {
+                            runCatching { focus.requestFocus() }
+                        }
                     }
                 }
                 .pointerInput(emu.cols, emu.rows, cellW, cellH) {
@@ -330,6 +362,7 @@ private fun TerminalPage(
                 fgDefault = scheme.fg,
                 bgDefault = scheme.bg,
                 cursorColor = scheme.cursor,
+                showUrls = TerminalSettings.openUrls,
                 selection = selection,
                 modifier = Modifier.fillMaxSize().padding(4.dp),
                 onCellSize = { w, h -> cellW = w; cellH = h },
@@ -702,6 +735,11 @@ private fun TerminalSettingsPanel(onDismiss: () -> Unit) {
             }
 
             Spacer(Modifier.height(18.dp))
+            Text("环境 · 备份", fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+            Spacer(Modifier.height(6.dp))
+            BackupSection()
+
+            Spacer(Modifier.height(18.dp))
             Box(
                 Modifier
                     .fillMaxWidth()
@@ -820,6 +858,154 @@ private fun SessionPanel(
             ) {
                 Text("取消", fontSize = 13.sp)
             }
+        }
+    }
+}
+
+/* ---------------- 环境安装条 ---------------- */
+
+@Composable
+private fun BootstrapBar(onDone: () -> Unit) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
+    var progress by remember { mutableStateOf(0f) }
+    var status by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("还没装 Termux 环境", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                Text(
+                    if (busy) status else "装完才有 bash / pkg / apt / git / python",
+                    fontSize = 11.sp,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                )
+            }
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(
+                        if (busy) MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.25f)
+                        else MiuixTheme.colorScheme.primary
+                    )
+                    .clickable(enabled = !busy) {
+                        busy = true
+                        error = null
+                        progress = 0f
+                        scope.launch {
+                            Bootstrap.install(ctx) { p, st ->
+                                progress = p
+                                status = st + " " + (p * 100).toInt() + "%"
+                            }
+                                .onSuccess {
+                                    status = "装好了"
+                                    onDone()
+                                }
+                                .onFailure { error = it.message }
+                            busy = false
+                        }
+                    }
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+            ) {
+                Text(
+                    if (busy) "安装中" else "安装",
+                    fontSize = 12.5.sp,
+                    color = if (busy) MiuixTheme.colorScheme.onSurfaceVariantSummary
+                    else MiuixTheme.colorScheme.onPrimary,
+                )
+            }
+        }
+        if (busy) {
+            Spacer(Modifier.height(6.dp))
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(5.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.18f))
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxWidth(progress.coerceIn(0f, 1f))
+                        .height(5.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(MiuixTheme.colorScheme.primary)
+                )
+            }
+        }
+        error?.let {
+            Spacer(Modifier.height(4.dp))
+            Text(it, fontSize = 11.sp, color = MiuixTheme.colorScheme.error)
+        }
+    }
+}
+
+/* ---------------- 备份 / 恢复 ---------------- */
+
+@Composable
+private fun BackupSection() {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
+    var msg by remember { mutableStateOf<String?>(null) }
+
+    val installed = Bootstrap.isInstalled(ctx)
+
+    Column(Modifier.fillMaxWidth()) {
+        Text(
+            if (installed) {
+                "已装 · 占 " + (Bootstrap.installedSize(ctx) / 1024.0 / 1024.0).let {
+                    String.format("%.0f MB", it)
+                }
+            } else {
+                "没装环境，备份也没东西可备"
+            },
+            fontSize = 11.5.sp,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            SmallAction("备份") {
+                if (!installed || busy) return@SmallAction
+                busy = true
+                msg = null
+                scope.launch {
+                    val dir = Backup.defaultDir().let { if (it.exists()) it else File(ctx.filesDir) }
+                    val out = File(dir, Backup.suggestName())
+                    Backup.backup(ctx, out)
+                        .onSuccess { msg = "备份好了：" + it.absolutePath }
+                        .onFailure { msg = "备份失败：" + it.message }
+                    busy = false
+                }
+            }
+            SmallAction("恢复") {
+                if (busy) return@SmallAction
+                val dir = Backup.defaultDir().let { if (it.exists()) it else File(ctx.filesDir) }
+                val list = Backup.listBackups(dir)
+                if (list.isEmpty()) {
+                    msg = "没找到备份（放在 " + dir.absolutePath + "）"
+                    return@SmallAction
+                }
+                busy = true
+                msg = null
+                scope.launch {
+                    Backup.restore(ctx, list.first())
+                        .onSuccess { msg = "恢复好了，重启会话生效" }
+                        .onFailure { msg = "恢复失败：" + it.message }
+                    busy = false
+                }
+            }
+            SmallAction("卸载环境") {
+                if (busy) return@SmallAction
+                Bootstrap.uninstall(ctx)
+                msg = "已删掉 files/usr"
+            }
+        }
+        msg?.let {
+            Spacer(Modifier.height(6.dp))
+            Text(it, fontSize = 11.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
         }
     }
 }

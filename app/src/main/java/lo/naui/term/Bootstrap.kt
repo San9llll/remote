@@ -244,7 +244,13 @@ object Bootstrap {
                 "解压完了但 bin/ 里没有 bash 或 sh，这个包可能不对"
             )
         }
-        onProgress(1f, "装好了")
+
+        // 装完就把源换成国内的 —— termux 默认那批欧洲镜像在国内全是 bad，
+        // 不换的话 pkg update 一上来就 "None of the mirrors are accessible"
+        onProgress(0.999f, "换成国内源（" + DEFAULT_MIRROR.label + "）")
+        setMirror(ctx, DEFAULT_MIRROR)
+
+        onProgress(1f, "装好了 · 源已设为" + DEFAULT_MIRROR.label)
     }
 
     /* ================= 下载 ================= */
@@ -558,15 +564,51 @@ object Bootstrap {
         Mirror("zju", "浙大", "https://mirrors.zju.edu.cn/termux/apt/termux-main"),
     )
 
+    /** 国内优先，装完默认就用它 */
+    val DEFAULT_MIRROR: Mirror get() = MIRRORS[1]     // 清华
+
+    /**
+     * 写 sources.list。
+     *
+     * 只写 main —— termux 的默认 sources.list 里塞了一堆欧洲镜像，
+     * apt 会挨个去试，国内全是 bad，最后报 "None of the mirrors are accessible"。
+     * 换成一个国内的，一条就通。
+     */
     suspend fun setMirror(ctx: Context, mirror: Mirror): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             val etc = File(prefix(ctx), "etc/apt").apply { mkdirs() }
             File(etc, "sources.list").writeText("deb " + mirror.url + " stable main\n")
-            File(etc, "sources.list.d").mkdirs()
-            File(etc, "sources.list.d/root.list").writeText(
-                "deb " + mirror.url.replace("termux-main", "termux-root") + " root stable\n"
-            )
+            // 顺手清掉可能存在的其它 list，免得 apt 又去试国外的
+            runCatching {
+                File(etc, "sources.list.d").listFiles()?.forEach { it.delete() }
+            }
         }
+    }
+
+    /** 现在用的是哪家（读 sources.list 认一下） */
+    fun currentMirror(ctx: Context): Mirror? {
+        val f = File(prefix(ctx), "etc/apt/sources.list")
+        if (!f.exists()) return null
+        val text = runCatching { f.readText() }.getOrDefault("")
+        return MIRRORS.firstOrNull { text.contains(it.url) }
+    }
+
+    /** 换完源跑一次 apt update，把结果原样返回给界面看 */
+    suspend fun aptUpdate(ctx: Context): String = withContext(Dispatchers.IO) {
+        val bash = File(prefix(ctx), "bin/bash")
+        if (!bash.exists()) return@withContext "环境没装"
+        runCatching {
+            val pb = ProcessBuilder(bash.absolutePath, "-lc", "apt update 2>&1 | tail -n 25")
+            pb.environment().clear()
+            environ(ctx).forEach { kv ->
+                val i = kv.indexOf('=')
+                if (i > 0) pb.environment()[kv.substring(0, i)] = kv.substring(i + 1)
+            }
+            val p = pb.redirectErrorStream(true).start()
+            val out = p.inputStream.bufferedReader().readText()
+            p.waitFor()
+            out.ifBlank { "（没输出）" }
+        }.getOrElse { "跑不起来：" + (it.message ?: it.javaClass.simpleName) }
     }
 
     /** 直接拿它跑一条命令，用来验证环境到底能不能用 */

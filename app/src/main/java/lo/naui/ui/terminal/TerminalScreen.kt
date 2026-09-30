@@ -168,6 +168,8 @@ fun TerminalScreen(onBack: () -> Unit) {
         if (!installed) {
             BootstrapBar(onDone = { tick++ })
             Spacer(Modifier.height(2.dp))
+        } else {
+            MirrorBar(onDone = { tick++ })
         }
 
         // 会话条：点一下切，长按关掉
@@ -1186,12 +1188,35 @@ private fun BackupSection() {
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Bootstrap.MIRRORS.forEach { m ->
-                SmallAction(m.label) {
-                    scope.launch {
-                        Bootstrap.setMirror(ctx, m)
-                            .onSuccess { msg = "源换成了：" + m.label + "（pkg update 生效）" }
-                            .onFailure { msg = "换源失败：" + it.message }
-                    }
+                val on = Bootstrap.currentMirror(ctx)?.id == m.id
+                Box(
+                    Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(
+                            if (on) MiuixTheme.colorScheme.primary
+                            else MiuixTheme.colorScheme.surfaceContainerHigh
+                        )
+                        .clickable(enabled = !busy) {
+                            scope.launch {
+                                busy = true
+                                msg = "正在换成 " + m.label + " 并 apt update…"
+                                Bootstrap.setMirror(ctx, m)
+                                    .onFailure { msg = "换源失败：" + it.message }
+                                    .onSuccess {
+                                        val out = Bootstrap.aptUpdate(ctx)
+                                        msg = "换成 " + m.label + " 了：\n" + out
+                                    }
+                                busy = false
+                            }
+                        }
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                ) {
+                    Text(
+                        m.label,
+                        fontSize = 11.5.sp,
+                        color = if (on) MiuixTheme.colorScheme.onPrimary
+                        else MiuixTheme.colorScheme.onSurface,
+                    )
                 }
             }
         }
@@ -1199,6 +1224,92 @@ private fun BackupSection() {
         msg?.let {
             Spacer(Modifier.height(6.dp))
             Text(it, fontSize = 11.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+        }
+    }
+}
+
+/* ---------------- 换源提示条 ---------------- */
+
+private val CN_MIRROR_IDS = setOf("tuna", "ustc", "bfsu", "nju", "sjtu", "zju")
+
+/**
+ * 环境装好了，但 apt 源还是 termux 默认那批欧洲镜像时，提醒一句。
+ *
+ * termux 默认 sources.list 里那串（ftp.fau.de / termux.3san.dev / mirrors.medzik.de …）
+ * 在国内挨个都会 bad，最后报 "None of the mirrors are accessible"。
+ */
+@Composable
+private fun MirrorBar(onDone: () -> Unit) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
+    var msg by remember { mutableStateOf<String?>(null) }
+
+    val current = Bootstrap.currentMirror(ctx)
+    val needSwap = current?.id !in CN_MIRROR_IDS
+
+    if (!needSwap && msg == null) return
+
+    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
+        if (needSwap) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("apt 源还是国外的", fontSize = 12.5.sp, fontWeight = FontWeight.Medium)
+                    Text(
+                        "termux 默认那批镜像国内连不上，pkg 会报 none of the mirrors are accessible",
+                        fontSize = 10.5.sp,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        maxLines = 2,
+                    )
+                }
+                Box(
+                    Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(
+                            if (busy) MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.25f)
+                            else MiuixTheme.colorScheme.primary
+                        )
+                        .clickable(enabled = !busy) {
+                            busy = true
+                            msg = "正在换成清华源…"
+                            scope.launch {
+                                Bootstrap.setMirror(ctx, Bootstrap.DEFAULT_MIRROR)
+                                    .onFailure { msg = "换源失败：" + it.message }
+                                    .onSuccess {
+                                        msg = "换好了，正在 apt update…"
+                                        msg = "清华源 apt update：\n" + Bootstrap.aptUpdate(ctx)
+                                        onDone()
+                                    }
+                                busy = false
+                            }
+                        }
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                ) {
+                    Text(
+                        if (busy) "换源中" else "换清华源",
+                        fontSize = 12.5.sp,
+                        color = if (busy) MiuixTheme.colorScheme.onSurfaceVariantSummary
+                        else MiuixTheme.colorScheme.onPrimary,
+                    )
+                }
+            }
+        }
+        msg?.let {
+            Spacer(Modifier.height(6.dp))
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+                    .padding(10.dp),
+            ) {
+                Text(
+                    it,
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = MiuixTheme.colorScheme.onSurface,
+                )
+            }
         }
     }
 }

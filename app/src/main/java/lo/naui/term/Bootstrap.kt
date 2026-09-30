@@ -579,9 +579,8 @@ object Bootstrap {
             val etc = File(prefix(ctx), "etc/apt").apply { mkdirs() }
             File(etc, "sources.list").writeText("deb " + mirror.url + " stable main\n")
             // 顺手清掉可能存在的其它 list，免得 apt 又去试国外的
-            runCatching {
-                File(etc, "sources.list.d").listFiles()?.forEach { it.delete() }
-            }
+            File(etc, "sources.list.d").listFiles()?.forEach { runCatching { it.delete() } }
+            Unit
         }
     }
 

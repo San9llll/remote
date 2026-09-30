@@ -42,7 +42,12 @@ object Bootstrap {
      */
     private const val MAX_REWRITE_BYTES = 8L * 1024 * 1024
 
-    /** 直连 + 一圈加速站，轮着来 */
+    /**
+     * 直连 + 一圈加速站。
+     *
+     * 顺序是按实测排的（本机 curl 打过一遍）：直连 / ghfast / ghproxy.net /
+     * gh-proxy / ghproxy.link 这几个是通的，后面三个时好时坏，放最后当彩票。
+     */
     private fun mirrors(arch: String): List<String> {
         val gh = "https://github.com/termux/termux-packages/releases/latest/download/bootstrap-$arch.zip"
         return listOf(
@@ -50,12 +55,16 @@ object Bootstrap {
             "https://ghfast.top/$gh",
             "https://ghproxy.net/$gh",
             "https://gh-proxy.com/$gh",
-            "https://ghproxy.cc/$gh",
+            "https://ghproxy.link/$gh",
             "https://github.moeyy.xyz/$gh",
-            "https://hub.gitmirror.com/$gh",
             "https://gh.llkk.cc/$gh",
+            "https://hub.gitmirror.com/$gh",
         )
     }
+
+    /** 给界面用：让用户能自己复制出去用浏览器下 */
+    fun manualUrl(): String =
+        "https://github.com/termux/termux-packages/releases/latest/download/bootstrap-" + arch() + ".zip"
 
     fun prefix(ctx: Context): File = File(ctx.filesDir, "usr")
     fun home(ctx: Context): File = File(ctx.filesDir, "home")
@@ -183,7 +192,11 @@ object Bootstrap {
         }
         throw IllegalStateException(
             "所有镜像都没下下来（最后试的是 " + last + "）\n" +
-                "可以自己下 bootstrap-" + arch + ".zip，然后用「从文件安装」喂进来"
+                "两个办法：\n" +
+                "1) 用浏览器打开下面这个地址下好 zip，再用「从文件装」选它：\n" +
+                manualUrl() + "\n" +
+                "2) 或者直接放到这个路径，再点「在线装」：\n" +
+                cachedZip(ctx).absolutePath
         )
     }
 

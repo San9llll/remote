@@ -81,7 +81,7 @@ private val NAV_DESTS = listOf(Dest.Home, Dest.Modules, Dest.Overview, Dest.Sett
 
 private enum class Sub {
         None, Theme, About, Files, Terminal, AgentConfig, AgentSessions,
-        Shelf, NewBook, Reader, BookConfig,
+        Shelf, NewBook, Reader, BookConfig, Personas,
     }
 
 /**
@@ -203,7 +203,11 @@ fun AppShell(prefs: ThemePrefs) {
             Sub.About -> AboutScreen(onBack = { sub = Sub.None })
             Sub.Files -> FileManagerScreen(onBack = { sub = Sub.None }, backdrop = backdrop)
             Sub.Terminal -> lo.naui.ui.terminal.TerminalScreen(onBack = { sub = Sub.None })
-            Sub.AgentConfig -> AgentConfigScreen(onBack = { sub = Sub.None })
+            Sub.AgentConfig -> AgentConfigScreen(
+                onBack = { sub = Sub.None },
+                onOpenPersonas = { sub = Sub.Personas },
+            )
+            Sub.Personas -> lo.naui.ui.agent.PersonasScreen(onBack = { sub = Sub.AgentConfig })
             Sub.AgentSessions -> AgentSessionsScreen(onBack = { sub = Sub.None })
 
             Sub.Shelf -> lo.naui.ui.book.ShelfScreen(

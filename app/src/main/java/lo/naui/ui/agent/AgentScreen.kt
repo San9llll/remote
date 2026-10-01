@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+
 package lo.naui.ui.agent
 
 import android.content.Context
@@ -6,6 +8,7 @@ import android.util.Base64
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -26,9 +29,11 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -39,28 +44,49 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import lo.naui.agent.AgentApi
+import lo.naui.agent.AgentChat
+import lo.naui.agent.AgentEnv
 import lo.naui.agent.AgentStore
 import lo.naui.agent.ChatAttachment
 import lo.naui.agent.ChatDb
 import lo.naui.agent.ChatMessage
+import lo.naui.agent.Persona
+import lo.naui.ui.common.BottomSheet
+import lo.naui.ui.component.GlassCard
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+
+private val clock = SimpleDateFormat("HH:mm", Locale.getDefault())
+
+/** 一条消息在界面上的样子（比 ChatMessage 多了时间、工具记录） */
+private data class UiMessage(
+    val role: String,
+    val text: String,
+    val images: Int = 0,
+    val at: Long = System.currentTimeMillis(),
+    val toolLog: List<String> = emptyList(),
+)
 
 /**
  * Agent 页。
  *
- * 走 OpenAI 兼容的 `/chat/completions`，所以 DeepSeek / OpenAI / 各种中转站
- * 只要填对 Base URL 和模型名就能用。Key、模型那些在「配置」里。
+ * 底下那排按用户要求改过：**文件 · 模型 · 输入栏 · 发送**。
+ * 「模型」那个点开是从下面滑上来的面板，里面能改模型、人格、最大输出、执行环境。
+ *
+ * 气泡：用户是**白边**液态玻璃，模型是**黑边**液态玻璃。
  */
 @Composable
 fun AgentScreen(
@@ -72,56 +98,52 @@ fun AgentScreen(
     AgentStore.init(ctx)
     ChatDb.init(ctx)
 
-    var messages by remember { mutableStateOf<List<ChatMessage>>(emptyList()) }
+    var messages by remember { mutableStateOf<List<UiMessage>>(emptyList()) }
     var convTitle by remember { mutableStateOf("新对话") }
     var pending by remember { mutableStateOf<List<ChatAttachment>>(emptyList()) }
     var draft by remember { mutableStateOf("") }
     var sending by remember { mutableStateOf(false) }
+    var progress by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
+    var sheetOpen by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
 
-    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        if (uri != null) {
-            scope.launch {
-                val a = readImage(ctx, uri)
-                if (a == null) error = "这张图读不了（太大或者没权限）" else pending = pending + a
-            }
-        }
-    }
+    // 一个文件按钮就够了（图片和文本都从这儿进，按类型自己分辨）
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             scope.launch {
-                val a = readTextFile(ctx, uri)
-                if (a == null) error = "这个文件读不了（只收 256KB 以内的文本）" else pending = pending + a
+                val mime = runCatching { ctx.contentResolver.getType(uri).orEmpty() }.getOrDefault("")
+                val a = if (mime.startsWith("image/")) readImage(ctx, uri) else readTextFile(ctx, uri)
+                if (a == null) error = "这个文件读不了（图片限 4MB，文本限 256KB）" else pending = pending + a
             }
         }
     }
 
-    // 第一次进来：挑最近那个会话；一个都没有就开个新的
     LaunchedEffect(Unit) {
         if (AgentStore.activeConvId == null) {
-            val latest = withContext(Dispatchers.IO) { ChatDb.list().firstOrNull()?.id }
+            val latest = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                ChatDb.list().firstOrNull()?.id
+            }
             AgentStore.openConv(latest ?: ChatDb.newId())
         }
     }
 
-    // 换会话 → 把本地的读出来
     LaunchedEffect(AgentStore.activeConvId) {
         val id = AgentStore.activeConvId ?: return@LaunchedEffect
-        messages = withContext(Dispatchers.IO) { ChatDb.load(id) }
-        convTitle = ChatDb.titleOf(messages)
-    }
-
-    // 对话一变就落盘（标题取第一条用户消息）
-    LaunchedEffect(messages, AgentStore.activeConvId) {
-        val id = AgentStore.activeConvId ?: return@LaunchedEffect
-        if (messages.isEmpty()) return@LaunchedEffect
-        convTitle = ChatDb.titleOf(messages)
-        withContext(Dispatchers.IO) { ChatDb.save(id, convTitle, messages) }
+        val stored = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { ChatDb.load(id) }
+        messages = stored.map { UiMessage(it.role, it.text, it.images.size, System.currentTimeMillis()) }
+        convTitle = ChatDb.titleOf(stored)
     }
 
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
+    }
+
+    fun persist(list: List<UiMessage>) {
+        val id = AgentStore.activeConvId ?: return
+        val plain = list.map { ChatMessage(it.role, it.text, imageCount = it.images) }
+        convTitle = ChatDb.titleOf(plain)
+        scope.launch(kotlinx.coroutines.Dispatchers.IO) { ChatDb.save(id, convTitle, plain) }
     }
 
     fun send() {
@@ -141,26 +163,42 @@ fun AgentScreen(
             return
         }
 
-        val history = messages + ChatMessage("user", composed, images)
+        val user = UiMessage("user", composed, images.size)
+        val history = messages + user
         messages = history
+        persist(history)
         draft = ""
         pending = emptyList()
         error = null
         sending = true
+        progress = "在想…"
+
         scope.launch {
-            runCatching { AgentApi.complete(history) }
-                .onSuccess { messages = messages + ChatMessage("assistant", it) }
+            val chatHistory = history.map { ChatMessage(it.role, it.text) }
+            AgentChat.run(
+                ctx = ctx,
+                system = AgentStore.systemPromptNow,
+                history = chatHistory,
+                env = AgentStore.env,
+                maxTokens = AgentStore.maxTokens,
+                temperature = AgentStore.temperature,
+                onProgress = { progress = it },
+            )
+                .onSuccess { run ->
+                    val next = messages + UiMessage("assistant", run.reply, toolLog = run.toolLog)
+                    messages = next
+                    persist(next)
+                }
                 .onFailure { error = it.message ?: "调用失败" }
             sending = false
+            progress = ""
         }
     }
 
     Column(
-        Modifier
-            .fillMaxSize()
-            .windowInsetsPadding(WindowInsets.statusBars),
+        Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.statusBars),
     ) {
-        // 顶栏
+        // ---- 顶栏 ----
         Row(
             Modifier.fillMaxWidth().padding(start = 16.dp, end = 14.dp, top = 10.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -168,30 +206,28 @@ fun AgentScreen(
             Column(Modifier.weight(1f)) {
                 Text(convTitle, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
                 Text(
-                    if (AgentStore.ready) AgentStore.model else "还没配 API Key",
+                    if (AgentStore.ready) {
+                        AgentStore.model + " · " + AgentStore.persona.name + " · " + AgentStore.env.label
+                    } else {
+                        "还没配 API Key"
+                    },
                     fontSize = 12.sp,
                     color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
             Box(
-                Modifier
-                    .clip(RoundedCornerShape(50))
-                    .clickable { onOpenSessions() }
+                Modifier.clip(RoundedCornerShape(50)).clickable { onOpenSessions() }
                     .padding(horizontal = 10.dp, vertical = 6.dp),
-            ) {
-                Text("会话", fontSize = 13.sp, color = MiuixTheme.colorScheme.primary)
-            }
+            ) { Text("会话", fontSize = 13.sp, color = MiuixTheme.colorScheme.primary) }
             Box(
-                Modifier
-                    .clip(RoundedCornerShape(50))
-                    .clickable { onOpenConfig() }
+                Modifier.clip(RoundedCornerShape(50)).clickable { onOpenConfig() }
                     .padding(horizontal = 10.dp, vertical = 6.dp),
-            ) {
-                Text("配置", fontSize = 13.sp, color = MiuixTheme.colorScheme.primary)
-            }
+            ) { Text("配置", fontSize = 13.sp, color = MiuixTheme.colorScheme.primary) }
         }
 
-        // 消息
+        // ---- 消息 ----
         Box(Modifier.weight(1f).fillMaxWidth()) {
             if (messages.isEmpty()) {
                 Column(
@@ -199,11 +235,11 @@ fun AgentScreen(
                     verticalArrangement = Arrangement.Center,
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    Text("什么都没问过", fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                    Text("还没聊过", fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "可以带图片和文本文件；配置里换个 Base URL 就是另一家的模型",
-                        fontSize = 12.sp,
+                        "它能真的动手：跑命令、读写文件、看设备信息（在「模型」那个面板里选环境）",
+                        fontSize = 11.5.sp,
                         color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                     )
                 }
@@ -218,7 +254,7 @@ fun AgentScreen(
                     if (sending) {
                         item(key = "__pending__") {
                             Text(
-                                "对方正在输入…",
+                                progress.ifBlank { "对方正在输入…" },
                                 fontSize = 12.sp,
                                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                                 modifier = Modifier.padding(start = 6.dp, top = 4.dp),
@@ -229,7 +265,7 @@ fun AgentScreen(
             }
         }
 
-        // 附件
+        // ---- 附件 ----
         if (pending.isNotEmpty()) {
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 14.dp),
@@ -263,7 +299,7 @@ fun AgentScreen(
             )
         }
 
-        // 输入行
+        // ---- 输入栏：文件 · 模型 · 输入 · 发送 ----
         Row(
             Modifier
                 .fillMaxWidth()
@@ -272,7 +308,7 @@ fun AgentScreen(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             RoundBtn("📎") { filePicker.launch(arrayOf("*/*")) }
-            RoundBtn("🖼") { imagePicker.launch("image/*") }
+            RoundBtn("⚙") { sheetOpen = true }
 
             BasicTextField(
                 value = draft,
@@ -282,10 +318,7 @@ fun AgentScreen(
                     .clip(RoundedCornerShape(14.dp))
                     .background(MiuixTheme.colorScheme.surfaceContainerHigh)
                     .padding(horizontal = 12.dp, vertical = 10.dp),
-                textStyle = TextStyle(
-                    fontSize = 14.sp,
-                    color = MiuixTheme.colorScheme.onSurface,
-                ),
+                textStyle = TextStyle(fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurface),
                 cursorBrush = SolidColor(MiuixTheme.colorScheme.primary),
             )
 
@@ -306,14 +339,15 @@ fun AgentScreen(
                     if (sending) "…" else "发送",
                     fontSize = 13.5.sp,
                     fontWeight = FontWeight.Medium,
-                    color = if (sending || !AgentStore.ready) {
-                        MiuixTheme.colorScheme.onSurfaceVariantSummary
-                    } else {
-                        MiuixTheme.colorScheme.onPrimary
-                    },
+                    color = if (sending || !AgentStore.ready) MiuixTheme.colorScheme.onSurfaceVariantSummary
+                    else MiuixTheme.colorScheme.onPrimary,
                 )
             }
         }
+    }
+
+    if (sheetOpen) {
+        ModelSheet(onDismiss = { sheetOpen = false })
     }
 }
 
@@ -331,35 +365,272 @@ private fun RoundBtn(label: String, onClick: () -> Unit) {
     }
 }
 
+/**
+ * 气泡。
+ *
+ * 用户的用**白边**液态玻璃，模型的用**黑边**液态玻璃 —— 用户点名要的。
+ * 时间挂在消息下面（用户的消息也带时间）。
+ */
 @Composable
-private fun Bubble(m: ChatMessage) {
+private fun Bubble(m: UiMessage) {
     val mine = m.role == "user"
     Row(
         Modifier.fillMaxWidth(),
         horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start,
     ) {
+        val shape = RoundedCornerShape(16.dp)
         Box(
             Modifier
-                .widthIn(max = 300.dp)
-                .clip(RoundedCornerShape(16.dp))
-                .background(
-                    if (mine) MiuixTheme.colorScheme.primary.copy(alpha = 0.14f)
-                    else MiuixTheme.colorScheme.surfaceContainerHigh
+                .widthIn(max = 310.dp)
+                .clip(shape)
+                .border(
+                    width = 1.2.dp,
+                    color = if (mine) Color.White.copy(alpha = 0.75f) else Color.Black.copy(alpha = 0.8f),
+                    shape = shape,
                 )
-                .padding(12.dp),
+                .padding(2.dp),
         ) {
-            Column {
-                if (m.images.isNotEmpty()) {
-                    Text(
-                        "［" + m.images.size + " 张图片］",
-                        fontSize = 11.sp,
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                        modifier = Modifier.padding(bottom = 4.dp),
-                    )
+            GlassCard(
+                backdrop = null,
+                modifier = Modifier.fillMaxWidth(),
+                shape = shape,
+                contentPadding = 12.dp,
+            ) {
+                Column {
+                    if (m.images > 0) {
+                        Text(
+                            "［" + m.images + " 张图片］",
+                            fontSize = 11.sp,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            modifier = Modifier.padding(bottom = 4.dp),
+                        )
+                    }
+                    Text(m.text.ifBlank { "（空）" }, fontSize = 14.sp)
+
+                    if (m.toolLog.isNotEmpty()) {
+                        Spacer(Modifier.height(8.dp))
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+                                .padding(8.dp),
+                        ) {
+                            Text(
+                                "用了 " + m.toolLog.size + " 次工具",
+                                fontSize = 10.5.sp,
+                                color = MiuixTheme.colorScheme.primary,
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            m.toolLog.forEach { line ->
+                                Text(
+                                    line,
+                                    fontSize = 10.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                    maxLines = 6,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Spacer(Modifier.height(3.dp))
+                            }
+                        }
+                    }
                 }
-                Text(m.text.ifBlank { "（空）" }, fontSize = 14.sp)
             }
         }
+    }
+    // 时间单独一行挂在下面
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start,
+    ) {
+        Text(
+            clock.format(Date(m.at)),
+            fontSize = 10.sp,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+        )
+    }
+}
+
+/* ---------------- 模型 / 人格 / 环境 面板 ---------------- */
+
+@Composable
+private fun ModelSheet(onDismiss: () -> Unit) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var models by remember { mutableStateOf<List<String>>(emptyList()) }
+    var busy by remember { mutableStateOf(false) }
+    var msg by remember { mutableStateOf<String?>(null) }
+    var editingPersona by remember { mutableStateOf<Persona?>(null) }
+
+    BottomSheet(title = "模型 · 人格 · 环境", onDismiss = onDismiss) {
+        // 模型
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("模型", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            Spacer(Modifier.weight(1f))
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.14f))
+                    .clickable(enabled = !busy) {
+                        busy = true
+                        msg = "正在问服务商有哪些模型…"
+                        scope.launch {
+                            lo.naui.agent.AgentApi.listModels()
+                                .onSuccess { models = it; msg = "拿到 " + it.size + " 个" }
+                                .onFailure { msg = "拿不到：" + (it.message ?: "") }
+                            busy = false
+                        }
+                    }
+                    .padding(horizontal = 12.dp, vertical = 5.dp),
+            ) { Text("拉取模型", fontSize = 11.5.sp, color = MiuixTheme.colorScheme.primary) }
+        }
+        Spacer(Modifier.height(6.dp))
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+                .padding(horizontal = 12.dp, vertical = 9.dp),
+        ) {
+            Text(AgentStore.model, fontSize = 12.5.sp)
+        }
+        if (models.isNotEmpty()) {
+            Spacer(Modifier.height(6.dp))
+            Column {
+                models.take(40).forEach { m ->
+                    val on = m == AgentStore.model
+                    Text(
+                        (if (on) "● " else "○ ") + m,
+                        fontSize = 12.sp,
+                        color = if (on) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { AgentStore.updateModel(m) }
+                            .padding(vertical = 7.dp, horizontal = 8.dp),
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(14.dp))
+        // 人格
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("人格", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            Spacer(Modifier.weight(1f))
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.14f))
+                    .clickable {
+                        editingPersona = Persona(Persona.newId(), "新人格", "")
+                    }
+                    .padding(horizontal = 12.dp, vertical = 5.dp),
+            ) { Text("新建", fontSize = 11.5.sp, color = MiuixTheme.colorScheme.primary) }
+        }
+        Spacer(Modifier.height(6.dp))
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            AgentStore.personas.forEach { p ->
+                val on = p.id == AgentStore.personaId
+                Box(
+                    Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(
+                            if (on) MiuixTheme.colorScheme.primary
+                            else MiuixTheme.colorScheme.surfaceContainerHigh
+                        )
+                        .clickable { AgentStore.selectPersona(p.id); editingPersona = p }
+                        .padding(horizontal = 14.dp, vertical = 7.dp),
+                ) {
+                    Text(
+                        p.name,
+                        fontSize = 12.sp,
+                        color = if (on) MiuixTheme.colorScheme.onPrimary else MiuixTheme.colorScheme.onSurface,
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(14.dp))
+        // 最大输出
+        Text("最大输出 token", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+        Spacer(Modifier.height(4.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf(4_096, 32_768, 128_000, 1_000_000).forEach { v ->
+                val on = AgentStore.maxTokens == v
+                Box(
+                    Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(
+                            if (on) MiuixTheme.colorScheme.primary
+                            else MiuixTheme.colorScheme.surfaceContainerHigh
+                        )
+                        .clickable { AgentStore.updateMaxTokens(v) }
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                ) {
+                    Text(
+                        if (v >= 1_000_000) "不限" else (v / 1024).toString() + "k",
+                        fontSize = 11.5.sp,
+                        color = if (on) MiuixTheme.colorScheme.onPrimary else MiuixTheme.colorScheme.onSurface,
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(14.dp))
+        // 环境
+        Text("模型能用的环境", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+        Spacer(Modifier.height(4.dp))
+        AgentEnv.entries.forEach { e ->
+            val on = AgentStore.env == e
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(
+                        if (on) MiuixTheme.colorScheme.primary.copy(alpha = 0.14f)
+                        else MiuixTheme.colorScheme.surfaceContainerHigh
+                    )
+                    .clickable { AgentStore.updateEnv(e) }
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    (if (on) "● " else "○ ") + e.label,
+                    fontSize = 12.5.sp,
+                    color = if (on) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onSurface,
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    e.summary.take(14),
+                    fontSize = 10.sp,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                )
+            }
+            Spacer(Modifier.height(4.dp))
+        }
+
+        msg?.let {
+            Spacer(Modifier.height(10.dp))
+            Text(it, fontSize = 11.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+        }
+    }
+
+    editingPersona?.let { p ->
+        PersonaEditor(
+            initial = p,
+            onDismiss = { editingPersona = null },
+            onSave = { AgentStore.savePersona(it); editingPersona = null },
+            onDelete = { AgentStore.deletePersona(p.id); editingPersona = null },
+            canDelete = AgentStore.personas.size > 1,
+        )
     }
 }
 
@@ -377,11 +648,10 @@ private suspend fun readImage(ctx: Context, uri: Uri): ChatAttachment? =
             val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() }
                 ?: return@runCatching null
             if (bytes.size > MAX_IMAGE_BYTES) return@runCatching null
-            val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
             ChatAttachment(
                 name = fileName(uri, "image"),
                 isImage = true,
-                dataUrl = "data:image/jpeg;base64," + b64,
+                dataUrl = "data:image/jpeg;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP),
                 bytes = bytes.size.toLong(),
             )
         }.getOrNull()

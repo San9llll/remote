@@ -139,6 +139,158 @@ object AgentApi {
         text.ifBlank { throw IllegalStateException("返回里没有内容：" + body.take(300)) }
     }
 
+    /* ================= 带工具的调用 ================= */
+
+    /** 模型回的一条：要么是话，要么是要调工具 */
+    data class Reply(
+        val text: String,
+        val toolCalls: List<Call>,
+    )
+
+    data class Call(val id: String, val name: String, val args: JSONObject)
+
+    /**
+     * 直接把 messages 数组发出去（工具循环里要拼 tool_calls / tool 这些角色，
+     * 用 [ChatMessage] 那种简单模型表达不了）。
+     */
+    suspend fun raw(
+        system: String,
+        messages: JSONArray,
+        tools: List<AgentTool>,
+        temperature: Float,
+        maxTokens: Int,
+    ): Reply = withContext(Dispatchers.IO) {
+        val url = URL(endpoint(AgentStore.baseUrl, "chat/completions"))
+        val conn = (url.openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 20_000
+            readTimeout = TIMEOUT_MS
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            setRequestProperty("Authorization", "Bearer " + AgentStore.apiKey)
+        }
+
+        val root = JSONObject()
+        root.put("model", AgentStore.model)
+        root.put("temperature", temperature.toDouble())
+        if (maxTokens > 0) root.put("max_tokens", maxTokens)
+        root.put("stream", false)
+
+        val list = JSONArray()
+        if (system.isNotBlank()) list.put(JSONObject().put("role", "system").put("content", system))
+        for (i in 0 until messages.length()) list.put(messages.get(i))
+        root.put("messages", list)
+
+        if (tools.isNotEmpty()) {
+            root.put("tools", JSONArray().also { a -> tools.forEach { a.put(it.toJson()) } })
+            root.put("tool_choice", "auto")
+        }
+
+        runCatching {
+            conn.outputStream.use { it.write(root.toString().toByteArray(Charsets.UTF_8)) }
+        }.getOrElse {
+            conn.disconnect()
+            throw IllegalStateException("连不上 " + url.host + "：" + (it.message ?: ""))
+        }
+
+        val code = conn.responseCode
+        val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
+            ?.bufferedReader()?.use { it.readText() }.orEmpty()
+        conn.disconnect()
+        if (code !in 200..299) {
+            val msg = runCatching { JSONObject(body).optJSONObject("error")?.optString("message") }.getOrNull()
+            throw IllegalStateException("HTTP " + code + "：" + (msg?.takeIf { it.isNotBlank() } ?: body.take(300)))
+        }
+
+        val msg = runCatching {
+            JSONObject(body).optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message")
+        }.getOrNull() ?: throw IllegalStateException("返回里没有 message")
+
+        val text = msg.optString("content", "")
+        val calls = mutableListOf<Call>()
+        msg.optJSONArray("tool_calls")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val fn = o.optJSONObject("function") ?: continue
+                val name = fn.optString("name", "")
+                if (name.isBlank()) continue
+                val argsRaw = fn.optString("arguments", "{}")
+                val args = runCatching { JSONObject(argsRaw) }.getOrElse { JSONObject() }
+                calls += Call(o.optString("id", "call_" + i), name, args)
+            }
+        }
+
+        Reply(text, calls)
+    }
+
+    /** 问服务商有哪些模型（GET /v1/models） */
+    suspend fun listModels(): Result<List<String>> = withContext(Dispatchers.IO) {
+        runCatching {
+            val url = URL(endpoint(AgentStore.baseUrl, "models"))
+            val conn = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 15_000
+                readTimeout = 25_000
+                setRequestProperty("Authorization", "Bearer " + AgentStore.apiKey)
+                setRequestProperty("Accept", "application/json")
+            }
+            val code = conn.responseCode
+            val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
+                ?.bufferedReader()?.use { it.readText() }.orEmpty()
+            conn.disconnect()
+            if (code !in 200..299) throw IllegalStateException("HTTP " + code + "：" + body.take(160))
+
+            val out = mutableListOf<String>()
+            runCatching {
+                JSONObject(body).optJSONArray("data")?.let { arr ->
+                    for (i in 0 until arr.length()) {
+                        val id = arr.optJSONObject(i)?.optString("id", "") ?: continue
+                        if (id.isNotBlank()) out += id
+                    }
+                }
+            }
+            if (out.isEmpty()) {
+                runCatching {
+                    val arr = JSONArray(body)
+                    for (i in 0 until arr.length()) {
+                        arr.optString(i).takeIf { it.isNotBlank() }?.let { out += it }
+                    }
+                }
+            }
+            if (out.isEmpty()) throw IllegalStateException("这个接口没返回模型列表")
+            out.distinct().sorted()
+        }
+    }
+
+    /** 把工具跑出来的东西包成一条 tool 消息 */
+    fun toolMessage(id: String, name: String, content: String): JSONObject =
+        JSONObject()
+            .put("role", "tool")
+            .put("tool_call_id", id)
+            .put("name", name)
+            .put("content", content.take(20_000))
+
+    /** 模型的"我要调工具"那条，得原样塞回对话里 */
+    fun assistantToolMessage(calls: List<Call>): JSONObject = JSONObject()
+        .put("role", "assistant")
+        .put("content", JSONObject.NULL)
+        .put(
+            "tool_calls",
+            JSONArray().also { arr ->
+                calls.forEach { c ->
+                    arr.put(
+                        JSONObject()
+                            .put("id", c.id)
+                            .put("type", "function")
+                            .put(
+                                "function",
+                                JSONObject().put("name", c.name).put("arguments", c.args.toString())
+                            )
+                    )
+                }
+            }
+        )
+
     private fun buildBody(system: String, history: List<ChatMessage>, temperature: Float, maxTokens: Int): String {
         val root = JSONObject()
         root.put("model", AgentStore.model)
@@ -164,8 +316,9 @@ object AgentApi {
         root.put("stream", false)
 
         val messages = JSONArray()
-        if (AgentStore.systemPrompt.isNotBlank()) {
-            messages.put(JSONObject().put("role", "system").put("content", AgentStore.systemPrompt))
+        val sys = AgentStore.systemPromptNow
+        if (sys.isNotBlank()) {
+            messages.put(JSONObject().put("role", "system").put("content", sys))
         }
         history.forEach { m ->
             // 历史里从本地读回来的消息没有 base64，只有 imageCount，那部分图就不重发了

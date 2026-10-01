@@ -40,6 +40,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import lo.naui.book.Book
 import lo.naui.book.BookStore
+import lo.naui.sys.UiState
 import lo.naui.ui.component.GlassCard
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -63,6 +64,7 @@ fun ShelfScreen(
 ) {
     val ctx = LocalContext.current
     BookStore.init(ctx)
+    UiState.init(ctx)
 
     var books by remember { mutableStateOf<List<Book>>(emptyList()) }
     var tick by remember { mutableStateOf(0) }
@@ -152,7 +154,7 @@ fun ShelfScreen(
                 BookRow(
                     book = book,
                     backdrop = backdrop,
-                    onClick = { onOpenBook(book.id) },
+                    onClick = { UiState.saveBook(book.id); onOpenBook(book.id) },
                     onLongClick = { deleteTarget = book },
                 )
             }

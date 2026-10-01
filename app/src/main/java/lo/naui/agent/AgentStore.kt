@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import org.json.JSONArray
 
 /**
  * Agent 的配置（单独一份 SharedPreferences，跟主题分开存）。
@@ -28,7 +29,11 @@ object AgentStore {
         private set
     var temperature by mutableStateOf(0.7f)
         private set
-    var maxTokens by mutableStateOf(2048)
+    /**
+     * 最大回复长度。默认 1000000 —— 用户要求"无限制"，
+     * 但真填 0 有些家会报错，所以给个很大的数当"不限"。
+     */
+    var maxTokens by mutableStateOf(1_000_000)
         private set
 
     fun init(ctx: Context) {
@@ -40,7 +45,9 @@ object AgentStore {
         model = p.getString("model", "deepseek-chat") ?: "deepseek-chat"
         systemPrompt = p.getString("system_prompt", "") ?: ""
         temperature = p.getFloat("temperature", 0.7f)
-        maxTokens = p.getInt("max_tokens", 2048)
+        maxTokens = p.getInt("max_tokens", 1_000_000)
+        env = p.getString("env", AgentEnv.Sandbox.id)?.let { AgentEnv.of(it) } ?: AgentEnv.Sandbox
+        loadPersonas(p)
     }
 
     fun updateBaseUrl(v: String) {
@@ -58,9 +65,11 @@ object AgentStore {
         sp?.edit()?.putString("model", model)?.apply()
     }
 
+    /** 老接口：留着给别处用，改的是当前人格 */
     fun updateSystemPrompt(v: String) {
         systemPrompt = v
         sp?.edit()?.putString("system_prompt", v)?.apply()
+        savePersona(persona.copy(prompt = v))
     }
 
     fun updateTemperature(v: Float) {
@@ -69,8 +78,78 @@ object AgentStore {
     }
 
     fun updateMaxTokens(v: Int) {
-        maxTokens = v.coerceIn(64, 32768)
+        // 上不封顶，只保个下限
+        maxTokens = v.coerceAtLeast(64)
         sp?.edit()?.putInt("max_tokens", maxTokens)?.apply()
+    }
+
+    /** 模型干活用的环境：沙箱 or 本机 root */
+    var env by mutableStateOf(AgentEnv.Sandbox)
+        private set
+
+    fun updateEnv(v: AgentEnv) {
+        env = v
+        sp?.edit()?.putString("env", v.id)?.apply()
+    }
+
+    /* ---------- 人格 ---------- */
+
+    /** 一个人格：名字 + 提示词 */
+    var personas by mutableStateOf<List<Persona>>(emptyList())
+        private set
+
+    var personaId by mutableStateOf("")
+        private set
+
+    val persona: Persona
+        get() = personas.firstOrNull { it.id == personaId }
+            ?: personas.firstOrNull()
+            ?: Persona.DEFAULT
+
+    /** 当前生效的系统提示词 */
+    val systemPromptNow: String get() = persona.prompt
+
+    fun selectPersona(id: String) {
+        personaId = id
+        sp?.edit()?.putString("persona", id)?.apply()
+    }
+
+    fun savePersona(p: Persona) {
+        val next = personas.toMutableList()
+        val i = next.indexOfFirst { it.id == p.id }
+        if (i >= 0) next[i] = p else next += p
+        personas = next
+        personaId = p.id
+        persistPersonas()
+    }
+
+    fun deletePersona(id: String) {
+        if (personas.size <= 1) return
+        personas = personas.filter { it.id != id }
+        if (personaId == id) personaId = personas.first().id
+        persistPersonas()
+    }
+
+    private fun persistPersonas() {
+        runCatching {
+            val arr = JSONArray()
+            personas.forEach { arr.put(it.toJson()) }
+            sp?.edit()
+                ?.putString("personas", arr.toString())
+                ?.putString("persona", personaId)
+                ?.apply()
+        }
+    }
+
+    private fun loadPersonas(p: android.content.SharedPreferences) {
+        val list = runCatching {
+            val arr = JSONArray(p.getString("personas", "[]") ?: "[]")
+            (0 until arr.length()).mapNotNull { i -> Persona.from(arr.optJSONObject(i)) }
+        }.getOrDefault(emptyList())
+
+        personas = if (list.isEmpty()) listOf(Persona.DEFAULT) else list
+        personaId = p.getString("persona", "")?.takeIf { id -> personas.any { it.id == id } }
+            ?: personas.first().id
     }
 
     /** 当前打开的是哪个会话（null = 还没挑，进去自己挑最近一个或者新建） */

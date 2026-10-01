@@ -11,9 +11,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.unit.dp
 import lo.naui.ui.common.SectionTitle
+import lo.naui.ui.component.GlassCard
 import lo.naui.ui.theme.ThemePrefs
 import lo.naui.ui.theme.label
-import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
 import top.yukonga.miuix.kmp.basic.Scaffold
@@ -97,12 +97,15 @@ private fun SettingsIcon(icon: androidx.compose.ui.graphics.vector.ImageVector) 
 
 @Composable
 private fun SettingsCard(content: @Composable () -> Unit) {
-    Card(
+    // 用户要求设置页的卡也走玻璃
+    GlassCard(
+        backdrop = null,
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp)
             .padding(bottom = 8.dp),
+        contentPadding = 2.dp,
     ) {
-        Column { content() }
+        Column(Modifier.fillMaxWidth()) { content() }
     }
 }

@@ -77,6 +77,7 @@ import lo.naui.sys.FsEntry
 import lo.naui.sys.FsOps
 import lo.naui.sys.PrivLevel
 import lo.naui.sys.Privilege
+import lo.naui.sys.UiState
 import lo.naui.ui.component.GlassCard
 import lo.naui.ui.component.glassShape
 import top.yukonga.miuix.kmp.basic.Text
@@ -132,6 +133,7 @@ fun FileManagerScreen(
     val scope = rememberCoroutineScope()
     val cardShape = glassShape()
     FileStore.init(ctx)
+    UiState.init(ctx)
 
     var left by remember { mutableStateOf(PaneState(DEFAULT_DIR)) }
     var right by remember { mutableStateOf(PaneState(DEFAULT_DIR_RIGHT)) }
@@ -163,6 +165,7 @@ fun FileManagerScreen(
     }
 
     fun load(pane: Int, target: String) {
+        if (pane == 0 && !target.startsWith(SAF_PREFIX)) UiState.saveDir(target)
         scope.launch {
             loading = true
             note = null
@@ -203,7 +206,9 @@ fun FileManagerScreen(
     }
 
     LaunchedEffect(Unit) {
-        load(0, DEFAULT_DIR)
+        // 左栏接着上次待的地方；右栏固定去 Download
+        val resume = UiState.lastDir.takeIf { it.isNotBlank() } ?: DEFAULT_DIR
+        load(0, resume)
         load(1, DEFAULT_DIR_RIGHT)
     }
 

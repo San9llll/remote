@@ -139,8 +139,9 @@ fun PersonasScreen(onBack: () -> Unit) {
     }
 }
 
+/** 人格编辑弹窗 —— AgentScreen 那边也要用，所以是 internal 不是 private */
 @Composable
-private fun PersonaEditor(
+internal fun PersonaEditor(
     initial: Persona,
     onDismiss: () -> Unit,
     onSave: (Persona) -> Unit,

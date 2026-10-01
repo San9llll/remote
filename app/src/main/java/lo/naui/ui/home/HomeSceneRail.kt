@@ -1,6 +1,12 @@
 // Adapted from Aster (LyraVoid/Aster, GPL-3.0)
 package lo.naui.ui.home
 
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.rememberInfiniteTransition
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -146,6 +152,42 @@ fun HomeSceneRail(
     Box(modifier) {
         // ---- 导轨自己的背景 ----
         Box(Modifier.fillMaxSize()) {
+            // ---- 彩色流动 ----
+            // 一层慢慢游走的彩色渐变，盖在模糊壁纸上。
+            // 用户要的是"色彩动态变化、模糊保持不变" —— 所以模糊那层一个字没动，
+            // 只是上面多了一层会呼吸的颜色。
+            val shimmer = rememberInfiniteTransition(label = "rail_color")
+            val shift by shimmer.animateFloat(
+                initialValue = 0f,
+                targetValue = 1f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(9000, easing = LinearEasing),
+                    repeatMode = RepeatMode.Restart,
+                ),
+                label = "rail_shift",
+            )
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .drawWithCache {
+                        val h = size.height
+                        val w = size.width
+                        // 让渐变沿着导轨慢慢往下走
+                        val y0 = -h * 0.5f + h * 2f * shift
+                        val brush = Brush.linearGradient(
+                            colors = listOf(
+                                Color(0xFF7C4DFF).copy(alpha = 0.34f),   // 紫
+                                Color(0xFF00E5FF).copy(alpha = 0.26f),   // 青
+                                Color(0xFFFF4D8D).copy(alpha = 0.32f),   // 粉
+                                Color(0xFF7C4DFF).copy(alpha = 0.34f),   // 绕回紫，首尾接得上
+                            ),
+                            start = androidx.compose.ui.geometry.Offset(0f, y0),
+                            end = androidx.compose.ui.geometry.Offset(w, y0 + h * 0.9f),
+                        )
+                        onDrawBehind { drawRect(brush) }
+                    },
+            )
+
             if (wallpaper != null) {
                 Image(
                     bitmap = wallpaper,

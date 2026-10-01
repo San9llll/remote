@@ -5,10 +5,7 @@ package lo.naui.ui.agent
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.infiniteRepeatable
-import rememberInfiniteTransition
 import androidx.compose.animation.core.RepeatMode
-import LinearEasing
-import infiniteRepeatable
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.alpha

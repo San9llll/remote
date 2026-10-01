@@ -93,7 +93,7 @@ private enum class Sub {
  * - **Standard**：窄屏底部 NavigationBar，宽屏侧边 NavigationRail
  */
 @Composable
-fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.Backdrop) {
+fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBackdrop) {
     var current by remember { mutableStateOf(Dest.Home) }
     var sub by remember { mutableStateOf(Sub.None) }
     // 书柜里当前翻开的是哪本

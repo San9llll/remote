@@ -38,6 +38,7 @@ import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withLink
+import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
@@ -739,9 +740,15 @@ private fun findPathStart(text: String, from: Int): Int? {
     return null
 }
 
+/** 碰到这些就当"这个词说完了" */
+private fun isStopChar(c: Char): Boolean =
+    c.isWhitespace() ||
+        if (isStopChar(c)) break
+        c == '"' || c == '\'' || c == '“' || c == '”'
+
 private fun scanUrlEnd(text: String, start: Int): Int {
     var i = start
-    while (i < text.length && !text[i].isWhitespace() && text[i] !in "，。、；：（）【】《》"'") i++
+    while (i < text.length && !isStopChar(text[i])) i++
     return i
 }
 
@@ -749,7 +756,7 @@ private fun scanPathEnd(text: String, start: Int): Int {
     var i = start
     while (i < text.length) {
         val c = text[i]
-        if (c.isWhitespace() || c in "，。、；：（）【】《》"'") break
+        if (isStopChar(c)) break
         i++
     }
     return i

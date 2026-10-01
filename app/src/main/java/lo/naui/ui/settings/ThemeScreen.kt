@@ -324,6 +324,15 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
                                 steps = 16,
                             )
                             SliderPreference(
+                                value = prefs.dialogScrim,
+                                onValueChange = { prefs.updateDialogScrim(it) },
+                                title = "弹窗底层暗度",
+                                summary = "弹窗后面那层遮罩有多暗（危险请求那个弹窗也算）",
+                                valueText = String.format("%.2f", prefs.dialogScrim),
+                                valueRange = 0.1f..0.9f,
+                                steps = 15,
+                            )
+                            SliderPreference(
                                 value = prefs.glassRadius.toFloat(),
                                 onValueChange = { prefs.updateGlassRadius(it.toInt()) },
                                 title = "卡片圆角",

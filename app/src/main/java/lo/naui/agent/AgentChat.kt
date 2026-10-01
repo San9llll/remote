@@ -39,7 +39,7 @@ object AgentChat {
         temperature: Float,
         onProgress: (String) -> Unit,
         /** 碰上危险动作时问用户（策略是"每次问"才会调） */
-        askUser: (suspend (String) -> Boolean)? = null,
+        askUser: (suspend (DangerGuard.Hit) -> Boolean)? = null,
     ): Result<AgentRun> = withContext(Dispatchers.IO) {
         runCatching {
             val tools = AgentTools.toolsFor(env)

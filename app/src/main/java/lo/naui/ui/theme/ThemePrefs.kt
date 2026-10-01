@@ -383,6 +383,17 @@ class ThemePrefs(context: Context) {
         sp.edit().putFloat("glass_alpha", glassAlpha).apply()
     }
 
+    /**
+     * 弹窗底下那层的暗度（0.1~0.9）。
+     * 用户要"弹窗底层背景可修改"，就是它。
+     */
+    var dialogScrim by mutableStateOf(sp.getFloat("dialog_scrim", 0.55f))
+
+    fun updateDialogScrim(v: Float) {
+        dialogScrim = v.coerceIn(0.1f, 0.9f)
+        sp.edit().putFloat("dialog_scrim", dialogScrim).apply()
+    }
+
     /** 卡片圆角，dp */
     var glassRadius by mutableStateOf(sp.getInt("glass_radius", 20))
 

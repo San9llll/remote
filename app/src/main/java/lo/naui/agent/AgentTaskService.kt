@@ -86,8 +86,9 @@ class AgentTaskService : Service() {
             },
             // 危险动作要问用户 —— 后台跑的时候没法弹窗，所以先拒掉，
             // 让模型知道"现在没人确认"，它自己会换办法
-            askUser = { reason ->
-                AgentTaskStore.progress("需要你确认（$reason）—— 回聊天页重发一次吧")
+            askUser = { hit ->
+                // 后台跑的时候没法弹窗，先拒掉，让模型知道"这会儿没人确认"
+                AgentTaskStore.progress("需要你确认（" + hit.category.label + "）—— 回聊天页重发一次吧")
                 false
             },
         )

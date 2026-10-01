@@ -30,11 +30,27 @@ object AgentStore {
     var temperature by mutableStateOf(0.7f)
         private set
     /**
-     * 最大回复长度。默认 1000000 —— 用户要求"无限制"，
-     * 但真填 0 有些家会报错，所以给个很大的数当"不限"。
+     * 最大回复长度。
+     *
+     * **0 = 不限**，这时候请求里**不带 max_tokens 字段**。
+     * （以前是塞个 1000000 当"不限"，结果有些家直接报错 ——
+     * 超过它自己的上限就拒绝，所以改成"干脆不带"。）
      */
-    var maxTokens by mutableStateOf(1_000_000)
+    var maxTokens by mutableStateOf(0)
         private set
+
+    /**
+     * 一次对话最多让它调几轮工具。
+     *
+     * 以前写死 8，一撞到就卡在"工具已经使用 8 次"。现在可配。
+     */
+    var maxToolRounds by mutableStateOf(16)
+        private set
+
+    fun updateMaxToolRounds(v: Int) {
+        maxToolRounds = v.coerceIn(1, 64)
+        sp?.edit()?.putInt("max_tool_rounds", maxToolRounds)?.apply()
+    }
 
     fun init(ctx: Context) {
         if (sp != null) return
@@ -45,7 +61,8 @@ object AgentStore {
         model = p.getString("model", "deepseek-chat") ?: "deepseek-chat"
         systemPrompt = p.getString("system_prompt", "") ?: ""
         temperature = p.getFloat("temperature", 0.7f)
-        maxTokens = p.getInt("max_tokens", 1_000_000)
+        maxTokens = p.getInt("max_tokens", 0)
+        maxToolRounds = p.getInt("max_tool_rounds", 16)
         env = p.getString("env", AgentEnv.Sandbox.id)?.let { AgentEnv.of(it) } ?: AgentEnv.Sandbox
         dangerPolicy = p.getString("danger", "ask")
             ?.let { id -> DangerGuard.Policy.entries.firstOrNull { it.id == id } }
@@ -81,8 +98,8 @@ object AgentStore {
     }
 
     fun updateMaxTokens(v: Int) {
-        // 上不封顶，只保个下限
-        maxTokens = v.coerceAtLeast(64)
+        // 0 就是"不限"；其它值保个下限
+        maxTokens = if (v <= 0) 0 else v.coerceAtLeast(256)
         sp?.edit()?.putInt("max_tokens", maxTokens)?.apply()
     }
 

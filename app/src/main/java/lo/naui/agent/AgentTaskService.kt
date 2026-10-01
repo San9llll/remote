@@ -71,6 +71,8 @@ class AgentTaskService : Service() {
         ChatDb.init(this)
         val history = ChatDb.load(convId).map { ChatMessage(it.role, it.text) }
 
+        AgentTaskStore.beginStream()
+
         val result = AgentChat.run(
             ctx = this,
             system = system,
@@ -82,6 +84,10 @@ class AgentTaskService : Service() {
                 AgentTaskStore.progress(p)
                 notify(buildNotification(p))
             },
+            // 边想边说：三种增量分别往 Store 上堆，界面实时读
+            onReasoning = { r -> AgentTaskStore.appendReasoning(r) },
+            onDelta = { d -> AgentTaskStore.appendText(d) },
+            onRound = { n -> AgentTaskStore.setRounds(n) },
             // 危险动作：把请求挂到 Store 上，等界面弹窗让用户点
             askUser = { hit ->
                 val gate = kotlinx.coroutines.CompletableDeferred<Boolean>()
@@ -112,6 +118,8 @@ class AgentTaskService : Service() {
                         thinkRounds = run.thinkRounds,
                         usage = run.usage,
                         ok = true,
+                        reasoning = run.reasoning,
+                        steps = run.steps,
                     )
                 )
                 notify(buildNotification("想完了"))

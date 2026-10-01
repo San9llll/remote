@@ -22,11 +22,15 @@ object AgentTaskStore {
     data class Result(
         val conversationId: String,
         val reply: String,
-        val toolLog: List<String>,
-        val thinkRounds: Int,
-        val usage: AgentApi.Usage,
+        val toolLog: List<String> = emptyList(),
+        val thinkRounds: Int = 0,
+        val usage: AgentApi.Usage = AgentApi.Usage(),
         val ok: Boolean,
         val error: String = "",
+        /** 思考内容，落盘之后退出再进来也能点开看 */
+        val reasoning: String = "",
+        /** 结构化的工具记录（带耗时），界面用 */
+        val steps: List<AgentChat.ToolStep> = emptyList(),
     )
 
     data class State(
@@ -42,6 +46,47 @@ object AgentTaskStore {
     /** 界面盯着这个 */
     var state by mutableStateOf(State())
         private set
+
+    /* ---------- 流式：边生成边给界面看 ---------- */
+
+    /** 正在生成的正文（还没定稿那一份） */
+    var streamingText by mutableStateOf("")
+        private set
+
+    /** 正在生成的思考内容 */
+    var streamingReasoning by mutableStateOf("")
+        private set
+
+    /** 这一轮已经想了几次 */
+    var streamingRounds by mutableStateOf(0)
+        private set
+
+    /** 流式的中间记录：工具步骤（界面实时显示） */
+    var streamingSteps by mutableStateOf<List<String>>(emptyList())
+        private set
+
+    fun beginStream() {
+        streamingText = ""
+        streamingReasoning = ""
+        streamingRounds = 0
+        streamingSteps = emptyList()
+    }
+
+    fun appendReasoning(s: String) {
+        streamingReasoning += s
+    }
+
+    fun appendText(s: String) {
+        streamingText += s
+    }
+
+    fun setRounds(n: Int) {
+        streamingRounds = n
+    }
+
+    fun addStep(line: String) {
+        streamingSteps = streamingSteps + line
+    }
 
     /**
      * 有个危险动作正等着用户点。

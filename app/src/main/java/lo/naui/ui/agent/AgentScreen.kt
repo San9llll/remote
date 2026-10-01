@@ -2,6 +2,18 @@
 
 package lo.naui.ui.agent
 
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.alpha
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.AnimatedVisibility
 import android.content.Context
 import android.net.Uri
 import android.util.Base64
@@ -181,6 +193,10 @@ fun AgentScreen(
                     toolLog = r.toolLog,
                     thinkRounds = r.thinkRounds,
                     usage = r.usage,
+                    reasoning = r.reasoning,
+                    steps = r.steps.map { st ->
+                        st.label + "|" + st.brief + "|" + st.ok + "|" + st.outputChars + "|" + st.millis
+                    },
                 )
                 messages = next
                 persist(next)
@@ -211,6 +227,10 @@ fun AgentScreen(
                         toolLog = r.toolLog,
                         thinkRounds = r.thinkRounds,
                         usage = r.usage,
+                        reasoning = r.reasoning,
+                        steps = r.steps.map { st ->
+                            st.label + "|" + st.brief + "|" + st.ok + "|" + st.outputChars + "|" + st.millis
+                        },
                     )
                     messages = next
                     persist(next)
@@ -317,37 +337,21 @@ fun AgentScreen(
                     contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    items(messages) { m -> Bubble(m) }
-                    if (sending) {
-                        item(key = "__pending__") {
-                            Row(
-                                Modifier.padding(start = 6.dp, top = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(
-                                    progress.ifBlank { "对方正在输入…" },
-                                    fontSize = 12.sp,
-                                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                                )
-                                Spacer(Modifier.width(10.dp))
-                                // 卡住了能自己叫停，不用干等
-                                Box(
-                                    Modifier
-                                        .clip(RoundedCornerShape(50))
-                                        .background(MiuixTheme.colorScheme.error.copy(alpha = 0.14f))
-                                        .clickable {
-                                            lo.naui.agent.AgentTaskStore.cancel()
-                                        }
-                                        .padding(horizontal = 10.dp, vertical = 4.dp),
-                                ) {
-                                    Text(
-                                        "停",
-                                        fontSize = 11.sp,
-                                        color = MiuixTheme.colorScheme.error,
-                                    )
+                    items(messages) { m ->
+                        Bubble(
+                            m = m,
+                            onDelete = if (m.role == "user") {
+                                {
+                                    val next = messages - m
+                                    messages = next
+                                    persist(next)
                                 }
-                            }
-                        }
+                            } else null,
+                        )
+                    }
+                    // 正在生成的那条：边想边长，停止按钮去掉了
+                    if (sending) {
+                        item(key = "__streaming__") { StreamingBubble() }
                     }
                 }
             }
@@ -380,7 +384,7 @@ fun AgentScreen(
 
         if (tooLong) {
             Text(
-                "跑了 4 分钟还没完，可能是网络卡住了 —— 点上面的「停」可以中止",
+                "跑了 4 分钟还没完，可能是网络卡住了或者工具调太多轮 —— 可以切走，它会继续跑",
                 fontSize = 11.5.sp,
                 color = MiuixTheme.colorScheme.error,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
@@ -400,6 +404,8 @@ fun AgentScreen(
         Row(
             Modifier
                 .fillMaxWidth()
+                // 键盘弹起来时整条跟着抬 —— 不加的话输入框会被挡住
+                .imePadding()
                 .padding(horizontal = 12.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -578,96 +584,142 @@ private fun RoundBtn(label: String, onClick: () -> Unit) {
  * 时间挂在消息下面（用户的消息也带时间）。
  */
 @Composable
-private fun Bubble(m: UiMessage) {
+private fun Bubble(
+    m: UiMessage,
+    onDelete: (() -> Unit)? = null,
+) {
     val ctx = LocalContext.current
     val mine = m.role == "user"
     val shape = RoundedCornerShape(16.dp)
     var toolsOpen by remember { mutableStateOf(false) }
     var usageOpen by remember { mutableStateOf(false) }
+    var deleteOpen by remember { mutableStateOf(false) }
 
-    Row(
-        Modifier.fillMaxWidth(),
-        horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start,
+    // 入场：自己发的从右边屏幕外滑进来，模型发的从左边滑进来
+    var shown by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { shown = true }
+    val slide by animateFloatAsState(
+        targetValue = if (shown) 0f else (if (mine) 1f else -1f),
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessLow,
+        ),
+        label = "bubble_in",
+    )
+    val fade by animateFloatAsState(
+        targetValue = if (shown) 1f else 0f,
+        animationSpec = tween(220),
+        label = "bubble_fade",
+    )
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .graphicsLayer { translationX = slide * 90.dp.toPx() }
+            .alpha(fade),
     ) {
-        Box(
-            Modifier
-                // 上限，但按内容收缩
-                .widthIn(max = 300.dp)
-                .clip(shape),
-        ) {
-            GlassCard(
-                backdrop = null,
-                shape = shape,
-                contentPadding = 13.dp,
+        // ---- 长按自己那条 → 上方冒删除 ----
+        if (mine && onDelete != null) {
+            AnimatedVisibility(
+                visible = deleteOpen,
+                enter = expandVertically(tween(220)) + fadeIn(tween(180)),
+                exit = shrinkVertically(tween(180)) + fadeOut(tween(140)),
             ) {
-                Column {
-                    if (m.images > 0) {
-                        Text(
-                            "［" + m.images + " 张图片］",
-                            fontSize = 11.sp,
-                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                            modifier = Modifier.padding(bottom = 4.dp),
-                        )
-                    }
-
-                    // 正文：网址淡蓝 70% 可点开浏览器；文件路径点了进内置文件管理
-                    RichText(
-                        text = m.text.ifBlank { "（空）" },
-                        // 自己发的不染蓝，链接高亮只给模型那边
-                        highlight = !mine,
-                        onOpenUrl = { url ->
-                            runCatching {
-                                ctx.startActivity(
-                                    Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                )
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 4.dp),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    Box(
+                        Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(MiuixTheme.colorScheme.error.copy(alpha = 0.14f))
+                            .clickable {
+                                deleteOpen = false
+                                onDelete()
                             }
-                        },
-                        onOpenPath = { path -> openWithBuiltinFiles(ctx, path) },
-                    )
+                            .padding(horizontal = 14.dp, vertical = 6.dp),
+                    ) {
+                        Text("删除", fontSize = 12.sp, color = MiuixTheme.colorScheme.error)
+                    }
+                }
+            }
+        }
 
-                    // ---- 想了几次 / 用了几次工具（点了才展开）----
-                    if (!mine && (m.thinkRounds > 0 || m.toolLog.isNotEmpty())) {
-                        Spacer(Modifier.height(8.dp))
-                        Row(
-                            Modifier
-                                .clip(RoundedCornerShape(50))
-                                .background(MiuixTheme.colorScheme.surfaceContainerHigh)
-                                .clickable { toolsOpen = !toolsOpen }
-                                .padding(horizontal = 10.dp, vertical = 5.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start,
+        ) {
+            Box(
+                Modifier
+                    .widthIn(max = 300.dp)
+                    .clip(shape),
+            ) {
+                GlassCard(
+                    backdrop = null,
+                    shape = shape,
+                    contentPadding = 13.dp,
+                ) {
+                    Column {
+                        if (m.images > 0) {
                             Text(
-                                "思考了 " + m.thinkRounds + " 次 · 用了 " + m.toolLog.size + " 次工具",
-                                fontSize = 10.5.sp,
-                                color = MiuixTheme.colorScheme.primary,
-                            )
-                            Spacer(Modifier.width(4.dp))
-                            Text(
-                                if (toolsOpen) "▾" else "▸",
-                                fontSize = 10.5.sp,
-                                color = MiuixTheme.colorScheme.primary,
+                                "［" + m.images + " 张图片］",
+                                fontSize = 11.sp,
+                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                modifier = Modifier.padding(bottom = 4.dp),
                             )
                         }
 
-                        if (toolsOpen) {
-                            Spacer(Modifier.height(6.dp))
-                            Column(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(MiuixTheme.colorScheme.surfaceContainerHigh)
-                                    .padding(8.dp),
-                            ) {
-                                m.toolLog.forEach { line ->
-                                    Text(
-                                        line,
-                                        fontSize = 10.sp,
-                                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                                        maxLines = 4,
-                                        overflow = TextOverflow.Ellipsis,
+                        RichText(
+                            text = m.text.ifBlank { "（空）" },
+                            highlight = !mine,
+                            onOpenUrl = { url ->
+                                runCatching {
+                                    ctx.startActivity(
+                                        Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                     )
-                                    Spacer(Modifier.height(3.dp))
+                                }
+                            },
+                            onOpenPath = { path -> openWithBuiltinFiles(ctx, path) },
+                        )
+
+                        // ---- 想了几次 / 用了几次工具（左上角，点了展开）----
+                        if (!mine && (m.thinkRounds > 0 || m.steps.isNotEmpty())) {
+                            Spacer(Modifier.height(8.dp))
+                            ThinkChip(
+                                rounds = m.thinkRounds,
+                                reasoning = m.reasoning,
+                                steps = m.steps,
+                                expanded = toolsOpen,
+                                onToggle = { toolsOpen = !toolsOpen },
+                            )
+
+                            androidx.compose.animation.AnimatedVisibility(
+                                visible = toolsOpen,
+                                enter = expandVertically(tween(260)) + fadeIn(tween(200)),
+                                exit = shrinkVertically(tween(200)) + fadeOut(tween(140)),
+                            ) {
+                                Column(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 6.dp)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+                                        .padding(10.dp),
+                                ) {
+                                    if (m.reasoning.isNotBlank()) {
+                                        Text(
+                                            m.reasoning,
+                                            fontSize = 11.sp,
+                                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                            maxLines = 12,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        Spacer(Modifier.height(8.dp))
+                                    }
+                                    StepList(m.steps)
                                 }
                             }
                         }
@@ -675,67 +727,256 @@ private fun Bubble(m: UiMessage) {
                 }
             }
         }
-    }
 
-    // ---- 下面那行：时间 + （模型的）一个「！」----
-    Row(
-        Modifier.fillMaxWidth(),
-        horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            clock.format(Date(m.at)),
-            fontSize = 10.sp,
-            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-        )
-        if (!mine && m.usage.outputTokens > 0) {
-            Box(
-                Modifier
-                    .size(16.dp)
-                    .clip(CircleShape)
-                    .background(
-                        if (usageOpen) MiuixTheme.colorScheme.primary
-                        else MiuixTheme.colorScheme.surfaceContainerHigh
-                    )
-                    .clickable { usageOpen = !usageOpen },
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    "!",
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = if (usageOpen) MiuixTheme.colorScheme.onPrimary
-                    else MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                )
-            }
-        }
-    }
-
-    // ---- 用量小窗 ----
-    if (usageOpen) {
-        val u = m.usage
+        // ---- 下面那行：时间 + 用量 ----
         Row(
             Modifier.fillMaxWidth(),
             horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(
+            Text(
+                clock.format(Date(m.at)),
+                fontSize = 10.sp,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+            )
+            if (!mine && m.usage.outputTokens > 0) {
+                Box(
+                    Modifier
+                        .size(16.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (usageOpen) MiuixTheme.colorScheme.primary
+                            else MiuixTheme.colorScheme.surfaceContainerHigh
+                        )
+                        .clickable { usageOpen = !usageOpen },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        "!",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (usageOpen) MiuixTheme.colorScheme.onPrimary
+                        else MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    )
+                }
+            }
+        }
+
+        androidx.compose.animation.AnimatedVisibility(
+            visible = usageOpen,
+            enter = expandVertically(tween(240)) + fadeIn(tween(180)),
+            exit = shrinkVertically(tween(180)) + fadeOut(tween(120)),
+        ) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start,
+            ) {
+                val u = m.usage
+                Column(
+                    Modifier
+                        .widthIn(max = 300.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                ) {
+                    UsageRow("输入 Token（缓存）", u.cachedTokens)
+                    UsageRow("输入 Token（其他）", u.inputTokens)
+                    UsageRow("输出 Token", u.outputTokens)
+                    UsageRow("总输入", u.totalIn)
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "耗时 " + fmtDuration(u.millis),
+                        fontSize = 11.sp,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 那个"思考了 N 次"的小标签 */
+@Composable
+private fun ThinkChip(
+    rounds: Int,
+    reasoning: String,
+    steps: List<String>,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+) {
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(50))
+            .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+            .clickable { onToggle() }
+            .padding(horizontal = 10.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            buildString {
+                if (rounds > 0) append("思考了 ").append(rounds).append(" 次")
+                if (rounds > 0 && steps.isNotEmpty()) append(" · ")
+                if (steps.isNotEmpty()) append("用了 ").append(steps.size).append(" 次工具")
+            }.ifBlank { "过程" },
+            fontSize = 10.5.sp,
+            color = MiuixTheme.colorScheme.primary,
+        )
+        Spacer(Modifier.width(4.dp))
+        Text(
+            if (expanded) "▾" else "▸",
+            fontSize = 10.5.sp,
+            color = MiuixTheme.colorScheme.primary,
+        )
+    }
+}
+
+/** 工具步骤列表 —— 这里用灰字，用户点名要的 */
+@Composable
+private fun StepList(steps: List<String>) {
+    steps.forEach { raw ->
+        val parts = raw.split("|")
+        val label = parts.getOrElse(0) { "工具" }
+        val brief = parts.getOrElse(1) { "" }
+        val ok = parts.getOrElse(2) { "true" }.toBoolean()
+        val chars = parts.getOrElse(3) { "0" }
+        val ms = parts.getOrElse(4) { "0" }
+
+        Row(
+            Modifier.fillMaxWidth().padding(vertical = 3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "▸ " + label,
+                fontSize = 10.5.sp,
+                // 灰色字体
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                (if (ok) "完成" else "失败") + " · " + chars + "字 · " + ms + "ms",
+                fontSize = 10.sp,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.75f),
+            )
+        }
+        if (brief.isNotBlank()) {
+            Text(
+                brief,
+                fontSize = 10.sp,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.65f),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(start = 12.dp, bottom = 3.dp),
+            )
+        }
+    }
+}
+
+/**
+ * 正在生成的那一条。
+ *
+ * 用户抱怨过"不要等思考完了再发一大堆，要边思考边发" —— 所以这条是**活的**：
+ * 一边生成一边长，思考内容在专门的玻璃框里实时刷新。
+ */
+@Composable
+private fun StreamingBubble() {
+    val reasoning = lo.naui.agent.AgentTaskStore.streamingReasoning
+    val text = lo.naui.agent.AgentTaskStore.streamingText
+    val rounds = lo.naui.agent.AgentTaskStore.streamingRounds
+    val steps = lo.naui.agent.AgentTaskStore.streamingSteps
+    val shape = RoundedCornerShape(16.dp)
+
+    var shown by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { shown = true }
+    val slide by animateFloatAsState(
+        targetValue = if (shown) 0f else -1f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessLow,
+        ),
+        label = "stream_in",
+    )
+    val fade by animateFloatAsState(
+        targetValue = if (shown) 1f else 0f,
+        animationSpec = tween(220),
+        label = "stream_fade",
+    )
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .graphicsLayer { translationX = slide * 90.dp.toPx() }
+            .alpha(fade),
+    ) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
+            Box(
                 Modifier
                     .widthIn(max = 300.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(MiuixTheme.colorScheme.surfaceContainerHigh)
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                    .clip(shape),
             ) {
-                UsageRow("输入 Token（缓存）", u.cachedTokens)
-                UsageRow("输入 Token（其他）", u.inputTokens)
-                UsageRow("输出 Token", u.outputTokens)
-                UsageRow("总输入", u.totalIn)
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "耗时 " + fmtDuration(u.millis),
-                    fontSize = 11.sp,
-                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                )
+                GlassCard(backdrop = null, shape = shape, contentPadding = 13.dp) {
+                    Column {
+                        // ---- 思考框：液态玻璃里单独一个框，出现带动画 ----
+                        androidx.compose.animation.AnimatedVisibility(
+                            visible = reasoning.isNotBlank(),
+                            enter = expandVertically(tween(300)) + fadeIn(tween(240)),
+                            exit = shrinkVertically(tween(240)) + fadeOut(tween(160)),
+                        ) {
+                            Column(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 8.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(MiuixTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.7f))
+                                    .padding(10.dp),
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        "正在想…",
+                                        fontSize = 10.5.sp,
+                                        color = MiuixTheme.colorScheme.primary,
+                                    )
+                                    if (rounds > 0) {
+                                        Text(
+                                            "（第 " + rounds + " 轮）",
+                                            fontSize = 10.sp,
+                                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                        )
+                                    }
+                                }
+                                Spacer(Modifier.height(6.dp))
+                                Text(
+                                    reasoning,
+                                    fontSize = 11.sp,
+                                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                    maxLines = 10,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+
+                        if (text.isNotBlank()) {
+                            RichText(
+                                text = text,
+                                highlight = true,
+                                onOpenUrl = {},
+                                onOpenPath = {},
+                            )
+                        } else if (reasoning.isBlank()) {
+                            Text(
+                                "…",
+                                fontSize = 14.sp,
+                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            )
+                        }
+
+                        // 已经用过的工具，实时往上加
+                        if (steps.isNotEmpty()) {
+                            Spacer(Modifier.height(8.dp))
+                            StepList(steps)
+                        }
+                    }
+                }
             }
         }
     }
@@ -989,30 +1230,74 @@ private fun ModelSheet(onDismiss: () -> Unit) {
         }
 
         Spacer(Modifier.height(14.dp))
-        // 最大输出
+        // 最大输出：固定 4 个点。"不限"是真的**不往请求里带 max_tokens** ——
+        // 以前塞个 1000000 当不限，有些家超过自己上限就直接报错
         Text("最大输出 token", fontSize = 13.sp, fontWeight = FontWeight.Medium)
         Spacer(Modifier.height(4.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            listOf(4_096, 32_768, 128_000, 1_000_000).forEach { v ->
+            listOf(0, 4_096, 32_768, 131_072).forEach { v ->
                 val on = AgentStore.maxTokens == v
                 Box(
                     Modifier
-                        .clip(RoundedCornerShape(50))
+                        .weight(1f)
+                        .clip(RoundedCornerShape(10.dp))
                         .background(
                             if (on) MiuixTheme.colorScheme.primary
                             else MiuixTheme.colorScheme.surfaceContainerHigh
                         )
                         .clickable { AgentStore.updateMaxTokens(v) }
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                        .padding(vertical = 8.dp),
+                    contentAlignment = Alignment.Center,
                 ) {
                     Text(
-                        if (v >= 1_000_000) "不限" else (v / 1024).toString() + "k",
+                        if (v == 0) "不限" else (v / 1024).toString() + "k",
                         fontSize = 11.5.sp,
                         color = if (on) MiuixTheme.colorScheme.onPrimary else MiuixTheme.colorScheme.onSurface,
                     )
                 }
             }
         }
+        Spacer(Modifier.height(3.dp))
+        Text(
+            if (AgentStore.maxTokens == 0) "选了不限：请求里不带 max_tokens，交给服务商自己决定"
+            else "超过这个长度会被截断",
+            fontSize = 10.sp,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+        )
+
+        Spacer(Modifier.height(14.dp))
+        // 一次对话最多让它调几轮工具 —— 以前写死 8，撞上就卡"工具已经使用 8 次"
+        Text("工具调用上限", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+        Spacer(Modifier.height(4.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf(4, 8, 16, 32).forEach { v ->
+                val on = AgentStore.maxToolRounds == v
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(
+                            if (on) MiuixTheme.colorScheme.primary
+                            else MiuixTheme.colorScheme.surfaceContainerHigh
+                        )
+                        .clickable { AgentStore.updateMaxToolRounds(v) }
+                        .padding(vertical = 8.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        v.toString() + " 轮",
+                        fontSize = 11.5.sp,
+                        color = if (on) MiuixTheme.colorScheme.onPrimary else MiuixTheme.colorScheme.onSurface,
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(3.dp))
+        Text(
+            "一次对话里它最多来回调这么多轮工具，撞上限会停下来等你说话",
+            fontSize = 10.sp,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+        )
 
         Spacer(Modifier.height(14.dp))
         // 环境

@@ -60,6 +60,14 @@ object ChatDb {
                     role = o.optString("role", "user"),
                     text = o.optString("text", ""),
                     imageCount = o.optInt("images", 0),
+                    reasoning = o.optString("reasoning", ""),
+                    thinkRounds = o.optInt("think_rounds", 0),
+                    toolLog = o.optJSONArray("tool_log")?.let { a ->
+                        (0 until a.length()).map { a.optString(it) }
+                    }.orEmpty(),
+                    toolSteps = o.optJSONArray("tool_steps")?.let { a ->
+                        (0 until a.length()).map { a.optString(it) }
+                    }.orEmpty(),
                 )
             }
         }.getOrDefault(emptyList())
@@ -75,6 +83,10 @@ object ChatDb {
                         .put("role", m.role)
                         .put("text", m.text)
                         .put("images", m.images.size)
+                        .put("reasoning", m.reasoning)
+                        .put("think_rounds", m.thinkRounds)
+                        .put("tool_log", JSONArray().also { a -> m.toolLog.forEach { a.put(it) } })
+                        .put("tool_steps", JSONArray().also { a -> m.toolSteps.forEach { a.put(it) } })
                 )
             }
             val root = JSONObject()

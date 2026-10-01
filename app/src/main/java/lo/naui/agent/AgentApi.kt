@@ -18,6 +18,14 @@ data class ChatMessage(
     val text: String,
     val images: List<String> = emptyList(),
     val imageCount: Int = images.size,
+    /** 思考内容（R1 / o1 这类才有），存下来是为了**退出再进来还能点开看** */
+    val reasoning: String = "",
+    /** 想了几次 */
+    val thinkRounds: Int = 0,
+    /** 工具记录（脱敏过的文本行） */
+    val toolLog: List<String> = emptyList(),
+    /** 结构化工具记录：name|label|brief|ok|chars|millis（用 | 拼，省得再引一层 JSON） */
+    val toolSteps: List<String> = emptyList(),
 )
 
 /** 附件：图片走 base64 塞进 content，文本文件直接拼到正文前面 */
@@ -139,6 +147,152 @@ object AgentApi {
         text.ifBlank { throw IllegalStateException("返回里没有内容：" + body.take(300)) }
     }
 
+    /* ================= 流式（边想边说） ================= */
+
+    /**
+     * 流式请求。
+     *
+     * 要让界面**边思考边显示**，就不能等整个响应回来。
+     * 这里走 SSE：一行一行吃 `data: {...}`，把增量的
+     * 正文 / 思考内容 / 工具调用分别吐给回调。
+     *
+     * 三家字段名不一样，都试一遍：
+     *   - `reasoning_content`  DeepSeek R1
+     *   - `reasoning`          OpenAI 系
+     *   - `thinking`           有些中转站
+     */
+    suspend fun stream(
+        system: String,
+        messages: JSONArray,
+        tools: List<AgentTool>,
+        temperature: Float,
+        maxTokens: Int,
+        onReasoning: (String) -> Unit = {},
+        onDelta: (String) -> Unit = {},
+    ): Reply = withContext(Dispatchers.IO) {
+        val url = URL(endpoint(AgentStore.baseUrl, "chat/completions"))
+        val conn = (url.openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 20_000
+            readTimeout = TIMEOUT_MS
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            setRequestProperty("Authorization", "Bearer " + AgentStore.apiKey)
+            setRequestProperty("Accept", "text/event-stream")
+        }
+
+        val root = JSONObject()
+        root.put("model", AgentStore.model)
+        root.put("temperature", temperature.toDouble())
+        // 0 或不传 = 不限。有些家对超大值会直接报错，所以干脆不带这个字段
+        if (maxTokens > 0) root.put("max_tokens", maxTokens)
+        root.put("stream", true)
+
+        val list = JSONArray()
+        if (system.isNotBlank()) list.put(JSONObject().put("role", "system").put("content", system))
+        for (i in 0 until messages.length()) list.put(messages.get(i))
+        root.put("messages", list)
+
+        if (tools.isNotEmpty()) {
+            root.put("tools", JSONArray().also { a -> tools.forEach { a.put(it.toJson()) } })
+            root.put("tool_choice", "auto")
+        }
+
+        val startedAt = System.currentTimeMillis()
+        runCatching {
+            conn.outputStream.use { it.write(root.toString().toByteArray(Charsets.UTF_8)) }
+        }.getOrElse {
+            conn.disconnect()
+            throw IllegalStateException("连不上 " + url.host + "：" + (it.message ?: ""))
+        }
+
+        val code = conn.responseCode
+        if (code !in 200..299) {
+            val err = conn.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            conn.disconnect()
+            val msg = runCatching { JSONObject(err).optJSONObject("error")?.optString("message") }.getOrNull()
+            throw IllegalStateException("HTTP " + code + "：" + (msg?.takeIf { it.isNotBlank() } ?: err.take(300)))
+        }
+
+        val text = StringBuilder()
+        val reason = StringBuilder()
+        // 流式里的 tool_calls 是按 index 增量来的，得自己拼
+        val callBuf = LinkedHashMap<Int, Triple<StringBuilder, StringBuilder, StringBuilder>>()
+        var cached = 0
+        var input = 0
+        var output = 0
+
+        conn.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
+            while (true) {
+                val line = reader.readLine() ?: break
+                if (!line.startsWith("data:")) continue
+                val payload = line.removePrefix("data:").trim()
+                if (payload.isEmpty() || payload == "[DONE]") continue
+
+                val chunk = runCatching { JSONObject(payload) }.getOrNull() ?: continue
+
+                chunk.optJSONObject("usage")?.let { u ->
+                    val prompt = u.optInt("prompt_tokens", 0)
+                    cached = u.optJSONObject("prompt_tokens_details")?.optInt("cached_tokens", 0)
+                        ?: u.optInt("prompt_cache_hit_tokens", 0)
+                    input = (prompt - cached).coerceAtLeast(0)
+                    output = u.optInt("completion_tokens", 0)
+                }
+
+                val delta = chunk.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("delta")
+                    ?: continue
+
+                // 思考内容：三家字段名不一样，都看一眼
+                val r = delta.optString("reasoning_content").ifBlank { delta.optString("reasoning") }
+                    .ifBlank { delta.optString("thinking") }
+                if (r.isNotBlank()) {
+                    reason.append(r)
+                    onReasoning(r)
+                }
+
+                val c = delta.optString("content")
+                if (c.isNotBlank()) {
+                    text.append(c)
+                    onDelta(c)
+                }
+
+                delta.optJSONArray("tool_calls")?.let { arr ->
+                    for (i in 0 until arr.length()) {
+                        val o = arr.optJSONObject(i) ?: continue
+                        val idx = o.optInt("index", 0)
+                        val buf = callBuf.getOrPut(idx) {
+                            Triple(StringBuilder(), StringBuilder(), StringBuilder())
+                        }
+                        o.optString("id").takeIf { it.isNotBlank() }?.let { buf.first.append(it) }
+                        o.optJSONObject("function")?.let { f ->
+                            f.optString("name").takeIf { it.isNotBlank() }?.let { buf.second.append(it) }
+                            f.optString("arguments").takeIf { it.isNotBlank() }?.let { buf.third.append(it) }
+                        }
+                    }
+                }
+            }
+        }
+        conn.disconnect()
+
+        val calls = callBuf.entries.sortedBy { it.key }.mapNotNull { (i, buf) ->
+            val name = buf.second.toString().trim()
+            if (name.isBlank()) return@mapNotNull null
+            val argsRaw = buf.third.toString().ifBlank { "{}" }
+            Call(
+                id = buf.first.toString().ifBlank { "call_" + i },
+                name = name,
+                args = runCatching { JSONObject(argsRaw) }.getOrElse { JSONObject() },
+            )
+        }
+
+        Reply(
+            text = text.toString(),
+            toolCalls = calls,
+            usage = Usage(cached, input, output, System.currentTimeMillis() - startedAt),
+            reasoning = reason.toString(),
+        )
+    }
+
     /* ================= 带工具的调用 ================= */
 
     /** 一次调用的用量（各家都按 OpenAI 的 usage 字段给） */
@@ -159,6 +313,8 @@ object AgentApi {
         val text: String,
         val toolCalls: List<Call>,
         val usage: Usage = Usage(),
+        /** 思考内容（R1 / o1 这类会给 reasoning_content） */
+        val reasoning: String = "",
     )
 
     data class Call(val id: String, val name: String, val args: JSONObject)

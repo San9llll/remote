@@ -6,15 +6,31 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
+/** 一次工具调用干了什么（给界面展示，**不外露命令原文**） */
+data class ToolStep(
+    val name: String,
+    /** 人话名字：执行命令 / 读文件 … */
+    val label: String,
+    val brief: String,
+    val ok: Boolean,
+    val outputChars: Int,
+    /** 花在这件事上的时间 */
+    val millis: Long,
+)
+
 /** 一轮跑完的结果 */
 data class AgentRun(
     val reply: String,
-    /** 中间调了哪些工具（只留工具名 + 一句摘要，**不外露命令原文**） */
-    val toolLog: List<String>,
+    /** 中间调了哪些工具 */
+    val toolLog: List<String> = emptyList(),
+    /** 结构化的工具记录（带耗时，界面用） */
+    val steps: List<ToolStep> = emptyList(),
     /** 这一轮里模型想了几次（就是发了几次请求） */
     val thinkRounds: Int = 0,
     /** 这一轮总共的用量（多轮请求累加） */
     val usage: AgentApi.Usage = AgentApi.Usage(),
+    /** 思考内容（R1 / o1 这类才有） */
+    val reasoning: String = "",
 )
 
 /**
@@ -24,11 +40,10 @@ data class AgentRun(
  * 模型说"我要调 xxx" → 我们执行 → 结果塞回去 → 再问一遍，
  * 直到它不再调工具、只说话为止。
  *
- * 最多转 8 圈，防止它自己绕死。
+ * **走流式**：正文和思考内容都是边生成边吐给界面的，
+ * 不用等整段回来才显示。轮数上限由用户配（默认 8）。
  */
 object AgentChat {
-
-    private const val MAX_ROUNDS = 8
 
     suspend fun run(
         ctx: Context,
@@ -38,10 +53,17 @@ object AgentChat {
         maxTokens: Int,
         temperature: Float,
         onProgress: (String) -> Unit,
+        /** 思考内容的增量 */
+        onReasoning: (String) -> Unit = {},
+        /** 正文的增量 */
+        onDelta: (String) -> Unit = {},
+        /** 每转完一轮通知一声（界面拿它更新"思考了 N 次"） */
+        onRound: (Int) -> Unit = {},
         /** 碰上危险动作时问用户（策略是"每次问"才会调） */
         askUser: (suspend (DangerGuard.Hit) -> Boolean)? = null,
     ): Result<AgentRun> = withContext(Dispatchers.IO) {
         runCatching {
+            val maxRounds = AgentStore.maxToolRounds.coerceIn(1, 64)
             val tools = AgentTools.toolsFor(env)
             val messages = JSONArray()
             history.forEach { m ->
@@ -53,46 +75,73 @@ object AgentChat {
             }
 
             val log = mutableListOf<String>()
+            val steps = mutableListOf<ToolStep>()
+            val reasonAll = StringBuilder()
             var round = 0
             var cached = 0
             var input = 0
             var output = 0
             var spent = 0L
 
-            fun addUsage(u: AgentApi.Usage) {
-                cached += u.cachedTokens
-                input += u.inputTokens
-                output += u.outputTokens
-                spent += u.millis
-            }
-
-            while (round++ < MAX_ROUNDS) {
+            while (round++ < maxRounds) {
                 onProgress(if (round == 1) "在想…" else "第 " + round + " 轮…")
-                val reply = AgentApi.raw(system, messages, tools, temperature, maxTokens)
-                addUsage(reply.usage)
+
+                val reply = AgentApi.stream(
+                    system = system,
+                    messages = messages,
+                    tools = tools,
+                    temperature = temperature,
+                    maxTokens = maxTokens,
+                    onReasoning = { r ->
+                        reasonAll.append(r)
+                        onReasoning(r)
+                    },
+                    onDelta = { onDelta(it) },
+                )
+
+                cached += reply.usage.cachedTokens
+                input += reply.usage.inputTokens
+                output += reply.usage.outputTokens
+                spent += reply.usage.millis
+                onRound(round)
 
                 if (reply.toolCalls.isEmpty()) {
-                    val text = reply.text.ifBlank { "（模型没说话）" }
                     return@runCatching AgentRun(
-                        reply = text,
+                        reply = reply.text.ifBlank { "（模型没说话）" },
                         toolLog = log,
+                        steps = steps,
                         thinkRounds = round - 1,
                         usage = AgentApi.Usage(cached, input, output, spent),
+                        reasoning = reasonAll.toString(),
                     )
                 }
 
-                // 把它"要调工具"那条原样记进去，否则下一轮上下文对不上
                 messages.put(AgentApi.assistantToolMessage(reply.toolCalls))
 
                 reply.toolCalls.forEach { call ->
                     val brief = briefArgs(call.args)
-                    onProgress("正在用 " + call.name + " " + brief)
+                    val label = friendlyName(call.name)
+                    onProgress("正在用 " + label)
+
+                    val t0 = System.currentTimeMillis()
                     val result = AgentTools.run(ctx, env, call.name, call.args, askUser)
-                    // 只记"用了什么工具、成没成、多大动静"，命令原文不外露
-                    log += "▸ " + friendlyName(call.name) + " · " + brief +
+                    val cost = System.currentTimeMillis() - t0
+
+                    // 只记"用了什么、成没成、多大动静"，命令原文不进这条
+                    val line = "▸ " + label + " · " + brief +
                         "\n    " + (if (result.ok) "完成" else "失败") +
-                        " · 返回 " + result.output.length + " 字" +
+                        " · 返回 " + result.output.length + " 字 · " + cost + "ms" +
                         if (result.ok) "" else "：" + result.output.take(200)
+                    log += line
+                    steps += ToolStep(
+                        name = call.name,
+                        label = label,
+                        brief = brief,
+                        ok = result.ok,
+                        outputChars = result.output.length,
+                        millis = cost,
+                    )
+
                     messages.put(
                         AgentApi.toolMessage(
                             call.id,
@@ -104,10 +153,13 @@ object AgentChat {
             }
 
             AgentRun(
-                reply = "（工具调了 " + MAX_ROUNDS + " 轮还没完，先停一下）",
+                reply = "（工具已经调了 " + maxRounds + " 轮还没完，先停一下）\n" +
+                    "想让它多跑几轮的话，去聊天页那个 ⚙ 面板里把上限调高。",
                 toolLog = log,
+                steps = steps,
                 thinkRounds = round,
                 usage = AgentApi.Usage(cached, input, output, spent),
+                reasoning = reasonAll.toString(),
             )
         }
     }

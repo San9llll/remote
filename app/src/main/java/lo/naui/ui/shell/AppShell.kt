@@ -5,6 +5,9 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -98,6 +101,9 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
     var sub by remember { mutableStateOf(Sub.None) }
     // 书柜里当前翻开的是哪本
     var bookId by remember { mutableStateOf("") }
+
+    // 方案 B 的扩散原点（0~1 归一化）。侧栏点哪一项就把它设成那一项的中心
+    var spreadOrigin by remember { mutableStateOf(androidx.compose.ui.geometry.Offset(0.5f, 0.5f)) }
 
     val configuration = LocalConfiguration.current
     val widthDp = configuration.screenWidthDp
@@ -313,25 +319,48 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
                             modifier = Modifier.fillMaxSize(),
                             targetState = current to sub,
                             transitionSpec = {
+                                // 速度倍率：1.0 是基准，越大越快
+                                val speed = prefs.transitionSpeed.coerceIn(0.4f, 3f)
+                                fun dur(ms: Int) = (ms / speed).toInt().coerceAtLeast(60)
+
                                 // 进子页：从**左下角**放大展开
                                 // ——就是卡片左下那个按钮的位置，"从这里长出来"的感觉
                                 if (targetState.second != Sub.None) {
                                     (
-                                        fadeIn(tween(260)) +
+                                        fadeIn(tween(dur(260))) +
                                             scaleIn(
-                                                animationSpec = tween(360),
+                                                animationSpec = tween(dur(360)),
                                                 initialScale = 0.16f,
                                                 transformOrigin = TransformOrigin(0.06f, 0.94f),
                                             )
-                                        ).togetherWith(fadeOut(tween(180)))
+                                        ).togetherWith(fadeOut(tween(dur(180))))
+                                } else if (prefs.transitionStyle == lo.naui.ui.theme.TransitionStyle.None) {
+                                    // 无动画：直接切
+                                    EnterTransition.None togetherWith ExitTransition.None
+                                } else if (prefs.transitionStyle == lo.naui.ui.theme.TransitionStyle.Radial) {
+                                    // ---- 方案 B：从点的那个地方扩展开 ----
+                                    val o = spreadOrigin
+                                    (
+                                        scaleIn(
+                                            animationSpec = tween(dur(420), easing = FastOutSlowInEasing),
+                                            initialScale = 0.04f,
+                                            transformOrigin = TransformOrigin(o.x, o.y),
+                                        ) + fadeIn(tween(dur(200)))
+                                        ).togetherWith(
+                                        scaleOut(
+                                            animationSpec = tween(dur(300), easing = FastOutSlowInEasing),
+                                            targetScale = 1.08f,
+                                            transformOrigin = TransformOrigin(o.x, o.y),
+                                        ) + fadeOut(tween(dur(260)))
+                                    )
                                 } else {
-                                    // 切 tab：当一张长图在上下滚
+                                    // 方案 A：切 tab 当一张长图在上下滚
                                     // 旧页整屏往上滑走，新页从下面整屏顶上来；两页不重叠、不加淡入
                                     // 方向跟着 tab 顺序走（往右切 = 往下滚）
                                     val forward = targetState.first.ordinal >= initialState.first.ordinal
                                     val dir = if (forward) 1 else -1
                                     val spec = tween<IntOffset>(
-                                        durationMillis = 460,
+                                        durationMillis = dur(460),
                                         easing = FastOutSlowInEasing,
                                     )
                                     // 光上下滑会有几帧两张图硬碰硬，叠一层交叉淡化就顺了：
@@ -397,6 +426,12 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
                     destinations = railDests,
                     current = current,
                     onSelect = { current = it; sub = Sub.None },
+                    onSelectAt = { d, y ->
+                        // 记住"从哪儿长出来"，方案 B 用它当扩散圆心
+                        spreadOrigin = androidx.compose.ui.geometry.Offset(0.06f, y)
+                        current = d
+                        sub = Sub.None
+                    },
                     clockStyle = prefs.clockStyle,
                     wallpaper = wallpaper,
                     showBattery = prefs.railShowBattery,

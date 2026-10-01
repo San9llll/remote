@@ -14,6 +14,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -40,6 +44,7 @@ import lo.naui.ui.common.OptionDialog
 import lo.naui.ui.common.SectionTitle
 import lo.naui.ui.component.IndicatorSwitchPreference
 import lo.naui.ui.theme.CardStyle
+import lo.naui.ui.theme.TransitionStyle
 import lo.naui.ui.theme.ClockStyle
 import lo.naui.ui.theme.DarkMode
 import lo.naui.ui.theme.Density
@@ -165,23 +170,33 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
     var densityDraft by remember { mutableStateOf(prefs.density.densityOf()) }
     val scrollBehavior = MiuixScrollBehavior()
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = "主题",
-                scrollBehavior = scrollBehavior,
-            )
-        },
-    ) { innerPadding ->
+    // 注意：这里原来用的是 Miuix 的 Scaffold —— 它会自己铺一层 containerColor，
+    // 把外壳画在底层的那张「设置页背景」整个盖住，看着就像背景没生效。
+    // 换成自己搭：标题 + LazyColumn，背景直接透出来。
+    Column(Modifier.fillMaxSize()) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .windowInsetsPadding(WindowInsets.statusBars)
+                .padding(start = 18.dp, end = 6.dp, top = 12.dp, bottom = 6.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier
+                        .clip(RoundedCornerShape(50))
+                        .clickable { onBack() }
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                ) {
+                    Text("← 返回", fontSize = 13.sp, color = MiuixTheme.colorScheme.primary)
+                }
+                Spacer(Modifier.width(6.dp))
+                Text("主题", fontSize = 26.sp, fontWeight = FontWeight.SemiBold)
+            }
+        }
+
         LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .overScrollVertical()
-                .nestedScroll(scrollBehavior.nestedScrollConnection),
-            contentPadding = PaddingValues(
-                top = innerPadding.calculateTopPadding() + 12.dp,
-                bottom = innerPadding.calculateBottomPadding() + 32.dp,
-            ),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(top = 6.dp, bottom = 32.dp),
         ) {
             item(key = "preview") {
                 SectionTitle("预览")
@@ -232,6 +247,35 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
                         title = "跟随壁纸取色",
                         summary = "从首页那张照片里取种子色",
                     )
+                }
+            }
+
+            item(key = "motion") {
+                SectionTitle("动态效果")
+                SettingsCard {
+                    ArrowPreference(
+                        title = "切页动效",
+                        summary = prefs.transitionStyle.summary,
+                        startAction = { SettingsIcon(MiuixIcons.Refresh) },
+                        onClick = { dialog = "transition" },
+                    )
+                    AnimatedVisibility(
+                        visible = prefs.transitionStyle != TransitionStyle.None,
+                        enter = expandVertically(tween(300)) + fadeIn(tween(220)),
+                        exit = shrinkVertically(tween(240)) + fadeOut(tween(160)),
+                    ) {
+                        Column(Modifier.fillMaxWidth()) {
+                            SliderPreference(
+                                value = prefs.transitionSpeed,
+                                onValueChange = { prefs.updateTransitionSpeed(it) },
+                                title = "速度",
+                                summary = "越大越快",
+                                valueText = String.format("%.2f×", prefs.transitionSpeed),
+                                valueRange = 0.4f..3f,
+                                steps = 12,
+                            )
+                        }
+                    }
                 }
             }
 
@@ -493,6 +537,13 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
             options = ClockStyle.entries.map { Option(it.id, it.label, it.summary) },
             currentId = prefs.clockStyle.id,
             onPick = { id -> ClockStyle.entries.firstOrNull { it.id == id }?.let { prefs.updateClockStyle(it) } },
+            onDismiss = { dialog = null },
+        )
+        "transition" -> OptionDialog(
+            show = true, title = "切页动效",
+            options = TransitionStyle.entries.map { Option(it.id, it.label, it.summary) },
+            currentId = prefs.transitionStyle.id,
+            onPick = { id -> prefs.updateTransitionStyle(TransitionStyle.of(id)) },
             onDismiss = { dialog = null },
         )
         "cardstyle" -> OptionDialog(

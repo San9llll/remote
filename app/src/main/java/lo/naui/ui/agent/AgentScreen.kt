@@ -479,18 +479,12 @@ private fun Bubble(m: UiMessage) {
             Modifier
                 // 上限，但按内容收缩
                 .widthIn(max = 300.dp)
-                .clip(shape)
-                .border(
-                    width = 1.2.dp,
-                    color = if (mine) Color.White.copy(alpha = 0.75f) else Color.Black.copy(alpha = 0.8f),
-                    shape = shape,
-                )
-                .padding(2.dp),
+                .clip(shape),
         ) {
             GlassCard(
                 backdrop = null,
                 shape = shape,
-                contentPadding = 12.dp,
+                contentPadding = 13.dp,
             ) {
                 Column {
                     if (m.images > 0) {
@@ -505,6 +499,8 @@ private fun Bubble(m: UiMessage) {
                     // 正文：网址淡蓝 70% 可点开浏览器；文件路径点了进内置文件管理
                     RichText(
                         text = m.text.ifBlank { "（空）" },
+                        // 自己发的不染蓝，链接高亮只给模型那边
+                        highlight = !mine,
                         onOpenUrl = { url ->
                             runCatching {
                                 ctx.startActivity(
@@ -673,10 +669,21 @@ private fun openWithBuiltinFiles(ctx: Context, path: String) {
 @Composable
 private fun RichText(
     text: String,
+    highlight: Boolean = true,
     onOpenUrl: (String) -> Unit,
     onOpenPath: (String) -> Unit,
 ) {
     val linkColor = Color(0xFF64B5F6).copy(alpha = 0.70f)
+
+    // 不高亮就整段当普通文本画，省得白忙
+    if (!highlight) {
+        BasicText(
+            text = text,
+            style = TextStyle(fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurface),
+        )
+        return
+    }
+
     val annotated = remember(text) {
         buildAnnotatedString {
             var i = 0

@@ -131,6 +131,22 @@ enum class InfoMetric(val id: String, val label: String, val summary: String) {
     companion object { fun of(id: String?) = entries.firstOrNull { it.id == id } ?: None }
 }
 
+/**
+ * 切页动效。
+ *
+ * - [None] 直接切
+ * - [Slide] 方案 A：上下滚 + 交叉淡化（v0.30 那套）
+ * - [Radial] 方案 B：从**点的那个地方**扩展开，中间垫一层液态玻璃化开
+ */
+enum class TransitionStyle(val id: String, val label: String, val summary: String) {
+    None("none", "无动画", "直接切，最省电"),
+    Slide("slide", "方案 A", "长图上下滚 + 交叉淡化（v0.30 的）"),
+    Radial("radial", "方案 B", "从点击处扩展开，未展开的部分垫一层液态玻璃"),
+    ;
+
+    companion object { fun of(id: String?) = entries.firstOrNull { it.id == id } ?: Slide }
+}
+
 /** 侧栏信息块最多几行 */
 const val INFO_LINE_COUNT = 5
 
@@ -323,6 +339,22 @@ class ThemePrefs(context: Context) {
     fun updateRailShowOverview(v: Boolean) {
         railShowOverview = v
         sp.edit().putBoolean("rail_overview", v).apply()
+    }
+
+    /** 切页动效 */
+    var transitionStyle by mutableStateOf(TransitionStyle.of(sp.getString("transition", null)))
+
+    fun updateTransitionStyle(v: TransitionStyle) {
+        transitionStyle = v
+        sp.edit().putString("transition", v.id).apply()
+    }
+
+    /** 动效速度倍率：1.0 是默认，越大越快 */
+    var transitionSpeed by mutableStateOf(sp.getFloat("transition_speed", 1f))
+
+    fun updateTransitionSpeed(v: Float) {
+        transitionSpeed = v.coerceIn(0.4f, 3f)
+        sp.edit().putFloat("transition_speed", transitionSpeed).apply()
     }
 
     /* ---------- 玻璃参数（液态玻璃那几个旋钮）---------- */

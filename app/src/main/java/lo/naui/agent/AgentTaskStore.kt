@@ -61,6 +61,22 @@ object AgentTaskStore {
     var streamingRounds by mutableStateOf(0)
         private set
 
+    /**
+     * 现在正在跑哪个工具（空 = 没在跑）。
+     * 界面拿它显示一条进度条 —— 尤其是 AI 在跑 curl / wget 下载的时候。
+     */
+    var runningTool by mutableStateOf("")
+        private set
+
+    /** 正在跑的这条大概是在干嘛（"正在下载…" / "正在执行命令"） */
+    var runningToolHint by mutableStateOf("")
+        private set
+
+    fun setRunningTool(label: String, hint: String) {
+        runningTool = label
+        runningToolHint = hint
+    }
+
     /** 流式的中间记录：工具步骤（界面实时显示） */
     var streamingSteps by mutableStateOf<List<String>>(emptyList())
         private set
@@ -70,6 +86,8 @@ object AgentTaskStore {
         streamingReasoning = ""
         streamingRounds = 0
         streamingSteps = emptyList()
+        runningTool = ""
+        runningToolHint = ""
     }
 
     fun appendReasoning(s: String) {

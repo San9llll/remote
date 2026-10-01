@@ -123,9 +123,13 @@ object AgentChat {
                     val label = friendlyName(call.name)
                     onProgress("正在用 " + label)
 
+                    // 告诉界面"现在在跑什么"，好让进度条转起来
+                    AgentTaskStore.setRunningTool(label, guessHint(call.name, call.args))
+
                     val t0 = System.currentTimeMillis()
                     val result = AgentTools.run(ctx, env, call.name, call.args, askUser)
                     val cost = System.currentTimeMillis() - t0
+                    AgentTaskStore.setRunningTool("", "")
 
                     // 只记"用了什么、成没成、多大动静"，命令原文不进这条
                     val line = "▸ " + label + " · " + brief +
@@ -161,6 +165,35 @@ object AgentChat {
                 usage = AgentApi.Usage(cached, input, output, spent),
                 reasoning = reasonAll.toString(),
             )
+        }
+    }
+
+    /**
+     * 猜这条工具大概在干嘛。
+     *
+     * 重点是把**下载**认出来 —— 用户在 Agent 里让它下东西的时候，
+     * 界面上那条进度条得说"正在下载"，而不是干巴巴的"执行命令"。
+     */
+    private fun guessHint(toolName: String, args: JSONObject): String {
+        if (toolName != AgentTools.SHELL) {
+            return when (toolName) {
+                AgentTools.READ -> "正在读文件"
+                AgentTools.WRITE -> "正在写文件"
+                AgentTools.LIST -> "正在看目录"
+                AgentTools.DEVICE -> "正在问设备信息"
+                else -> "正在干活"
+            }
+        }
+        val cmd = args.optString("command", "").lowercase()
+        return when {
+            cmd.contains("curl") || cmd.contains("wget") -> "正在下载…"
+            cmd.contains("git clone") || cmd.contains("git pull") -> "正在拉代码…"
+            cmd.contains("pkg install") || cmd.contains("apt install") ||
+                cmd.contains("apt-get install") -> "正在装东西…"
+            cmd.contains("tar ") || cmd.contains("unzip") || cmd.contains("7z ") -> "正在解压…"
+            cmd.contains("cp ") || cmd.contains("mv ") || cmd.contains("rsync") -> "正在拷文件…"
+            cmd.contains("find ") || cmd.contains("grep ") -> "正在找东西…"
+            else -> "正在执行命令"
         }
     }
 

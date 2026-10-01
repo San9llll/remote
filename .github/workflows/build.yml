@@ -38,13 +38,32 @@ jobs:
         run: |
           SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
           echo "SDK=$SDK"
+          NDK_DIR="$SDK/ndk/27.0.12077973"
+
+          # ⚠️ GitHub 镜像（20260927 那版）里预装了一个**残废的 NDK**：
+          # 目录在、但少了 source.properties。而 sdkmanager 看到目录已存在就
+          # 直接跳过不修 —— 于是 Gradle 配置阶段就报
+          #   [CXX1101] NDK at ... did not have a source.properties file
+          # 所以先手动把这个坏目录清掉，再装一次。
+          if [ -d "$NDK_DIR" ] && [ ! -f "$NDK_DIR/source.properties" ]; then
+            echo "发现残废的 NDK 目录，删掉重装"
+            rm -rf "$NDK_DIR"
+          fi
+
           SM=$(ls "$SDK"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1)
           echo "sdkmanager=$SM"
           if [ -n "$SM" ]; then
             yes | "$SM" --licenses > /dev/null 2>&1 || true
-            "$SM" --install "ndk;27.0.12077973" > /dev/null 2>&1 || echo "NDK 安装失败，交给 Gradle 自己下"
+            "$SM" --install "ndk;27.0.12077973" > /dev/null 2>&1 || echo "sdkmanager 装 NDK 没成功"
           fi
-          ls "$SDK/ndk" 2>/dev/null || true
+
+          if [ -f "$NDK_DIR/source.properties" ]; then
+            echo "✅ NDK 就绪：$NDK_DIR"
+          else
+            echo "::error::NDK 还是不可用，看看镜像里都有啥："
+            ls "$SDK/ndk" 2>/dev/null || true
+            exit 1
+          fi
 
       - name: Kotlin 编译检查（快速）
         run: gradle compileReleaseKotlin --no-daemon
@@ -70,10 +89,22 @@ jobs:
       - name: 装 NDK（终端要 forkpty）
         run: |
           SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          echo "SDK=$SDK"
+          NDK_DIR="$SDK/ndk/27.0.12077973"
+          if [ -d "$NDK_DIR" ] && [ ! -f "$NDK_DIR/source.properties" ]; then
+            echo "发现残废的 NDK 目录，删掉重装"
+            rm -rf "$NDK_DIR"
+          fi
           SM=$(ls "$SDK"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1)
+          echo "sdkmanager=$SM"
           if [ -n "$SM" ]; then
             yes | "$SM" --licenses > /dev/null 2>&1 || true
-            "$SM" --install "ndk;27.0.12077973" > /dev/null 2>&1 || echo "NDK 安装失败，交给 Gradle 自己下"
+            "$SM" --install "ndk;27.0.12077973" > /dev/null 2>&1 || echo "sdkmanager 装 NDK 没成功"
+          fi
+          if [ ! -f "$NDK_DIR/source.properties" ]; then
+            echo "::error::NDK 还是不可用"
+            ls "$SDK/ndk" 2>/dev/null || true
+            exit 1
           fi
 
       # 只出 release 版（带日志的 debug 版不再推送）

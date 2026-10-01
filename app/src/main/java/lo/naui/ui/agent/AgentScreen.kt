@@ -832,6 +832,73 @@ private fun Bubble(
     }
 }
 
+
+/**
+ * 工具在跑的时候那条进度条。
+ *
+ * 自己画：一条来回跑的高光。不引第三方进度条组件，省得版本对不上。
+ */
+@Composable
+private fun RunningBar(label: String, hint: String) {
+    // 颜色得在外面先取 —— Canvas 的 DrawScope 里读不了 MiuixTheme
+    val barColor = MiuixTheme.colorScheme.primary
+    val trackColor = MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.18f)
+
+    val transition = androidx.compose.animation.core.rememberInfiniteTransition(label = "bar")
+    val phase by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+            animation = androidx.compose.animation.core.tween(1100, easing = androidx.compose.animation.core.LinearEasing),
+            repeatMode = androidx.compose.animation.core.RepeatMode.Restart,
+        ),
+        label = "bar_phase",
+    )
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                hint.ifBlank { "正在干活" },
+                fontSize = 10.5.sp,
+                color = MiuixTheme.colorScheme.primary,
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                label,
+                fontSize = 10.sp,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(3.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(trackColor),
+        ) {
+            // 一段来回跑的高光
+            androidx.compose.foundation.Canvas(Modifier.fillMaxWidth().height(3.dp)) {
+                val w = size.width
+                val barW = w * 0.34f
+                val x = (w + barW) * phase - barW
+                drawRoundRect(
+                    color = barColor,
+                    topLeft = androidx.compose.ui.geometry.Offset(x, 0f),
+                    size = androidx.compose.ui.geometry.Size(barW, size.height),
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.height / 2f),
+                )
+            }
+        }
+    }
+}
+
 /** 那个"思考了 N 次"的小标签 */
 @Composable
 private fun ThinkChip(
@@ -920,6 +987,8 @@ private fun StreamingBubble() {
     val text = lo.naui.agent.AgentTaskStore.streamingText
     val rounds = lo.naui.agent.AgentTaskStore.streamingRounds
     val steps = lo.naui.agent.AgentTaskStore.streamingSteps
+    val runningTool = lo.naui.agent.AgentTaskStore.runningTool
+    val runningToolHint = lo.naui.agent.AgentTaskStore.runningToolHint
     val shape = RoundedCornerShape(16.dp)
 
     var shown by remember { mutableStateOf(false) }
@@ -1003,6 +1072,17 @@ private fun StreamingBubble() {
                                 "…",
                                 fontSize = 14.sp,
                                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            )
+                        }
+
+                        // ---- 正在跑的工具：一条进度条 ----
+                        // AI 在下载大东西的时候，光看"正在下载…"字没有反馈，
+                        // 所以给一条会动的条子
+                        if (runningTool.isNotBlank()) {
+                            Spacer(Modifier.height(8.dp))
+                            RunningBar(
+                                label = runningTool,
+                                hint = runningToolHint,
                             )
                         }
 

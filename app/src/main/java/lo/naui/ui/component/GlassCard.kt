@@ -12,6 +12,16 @@
 // 以后新加的卡片只要用这个组件，就自动跟着一起变。
 package lo.naui.ui.component
 
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
@@ -61,8 +71,40 @@ fun GlassCard(
     modifier: Modifier = Modifier,
     shape: Shape? = null,
     contentPadding: Dp? = null,
+    /**
+     * 入场动画。
+     *
+     * 传 **0、1、2…** 就会从**侧边栏那一侧**滑进来，并且按序号错开出现，
+     * 落位时用 `spring` 回弹一下（果冻感）。不传（-1）就老老实实直接显示。
+     *
+     * 传个序号就行，不用每页自己写动画 —— 全项目一次生效。
+     */
+    enterIndex: Int = -1,
     content: @Composable BoxScope.() -> Unit,
 ) {
+    // ---- 入场：从左边（侧栏那侧）滑进来 + 错开 + 果冻回弹 ----
+    var entered by remember { mutableStateOf(enterIndex < 0) }
+    LaunchedEffect(enterIndex) {
+        if (enterIndex >= 0) {
+            kotlinx.coroutines.delay(enterIndex * 55L)   // 按序号错开
+            entered = true
+        }
+    }
+    val enterShift by animateFloatAsState(
+        targetValue = if (entered) 0f else 1f,
+        animationSpec = spring(
+            // 阻尼调小一点，落位时会往回弹一下 = 果冻
+            dampingRatio = 0.42f,
+            stiffness = Spring.StiffnessMediumLow,
+        ),
+        label = "card_enter",
+    )
+    val enterFade by animateFloatAsState(
+        targetValue = if (entered) 1f else 0f,
+        animationSpec = tween(260),
+        label = "card_fade",
+    )
+
     val isDark = LocalThemeModeState.current.isDark
     val surface = MiuixTheme.colorScheme.surface
     val tint = MiuixTheme.colorScheme.primary
@@ -91,6 +133,11 @@ fun GlassCard(
         /* ---------------- 液态玻璃（真折射） ---------------- */
         Box(
             modifier = modifier
+                // 入场：从侧栏那一侧滑进来，落位回弹
+                .graphicsLayer {
+                    translationX = -enterShift * 64f.dp.toPx()
+                    alpha = enterFade
+                }
                 .clip(realShape)
                 .drawBackdrop(
                     backdrop = bd,
@@ -116,6 +163,11 @@ fun GlassCard(
         /* ---------------- 仿玻璃（默认，纯 2D） ---------------- */
         Box(
             modifier = modifier
+                // 入场：从侧栏那一侧滑进来，落位回弹
+                .graphicsLayer {
+                    translationX = -enterShift * 64f.dp.toPx()
+                    alpha = enterFade
+                }
                 .clip(realShape)
                 .background(fill),
         ) {

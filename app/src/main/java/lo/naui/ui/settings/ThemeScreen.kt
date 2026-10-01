@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.sp
 import lo.naui.ui.common.Option
 import lo.naui.ui.common.OptionDialog
 import lo.naui.ui.common.SectionTitle
+import lo.naui.ui.component.GlassCard
 import lo.naui.ui.component.IndicatorSwitchPreference
 import lo.naui.ui.theme.CardStyle
 import lo.naui.ui.theme.TransitionStyle
@@ -214,7 +215,7 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
 
             item(key = "color") {
                 SectionTitle("配色")
-                SettingsCard {
+                SettingsCard(index = 0) {
                     val styles = ThemePaletteStyle.entries
                     OverlayDropdownPreference(
                         title = "配色方案",
@@ -252,7 +253,7 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
 
             item(key = "motion") {
                 SectionTitle("动态效果")
-                SettingsCard {
+                SettingsCard(index = 1) {
                     ArrowPreference(
                         title = "切页动效",
                         summary = prefs.transitionStyle.summary,
@@ -281,7 +282,7 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
 
             item(key = "card") {
                 SectionTitle("卡片")
-                SettingsCard {
+                SettingsCard(index = 2) {
                     ArrowPreference(
                         title = "卡片风格",
                         summary = prefs.cardStyle.summary,
@@ -384,7 +385,7 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
 
             item(key = "dark") {
                 SectionTitle("明暗与密度")
-                SettingsCard {
+                SettingsCard(index = 3) {
                     ArrowPreference(
                         title = "明暗",
                         summary = prefs.darkMode.summary,
@@ -405,7 +406,7 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
 
             item(key = "shell") {
                 SectionTitle("导航与外壳")
-                SettingsCard {
+                SettingsCard(index = 4) {
                     ArrowPreference(
                         title = "首页布局",
                         summary = prefs.homeLayout.summary,
@@ -439,7 +440,7 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
 
             item(key = "background") {
                 SectionTitle("背景")
-                SettingsCard {
+                SettingsCard(index = 5) {
                     ArrowPreference(
                         title = "主页大图",
                         summary = if (prefs.homeImage.isBlank()) {
@@ -576,14 +577,17 @@ private fun SettingsIcon(icon: androidx.compose.ui.graphics.vector.ImageVector) 
 }
 
 @Composable
-private fun SettingsCard(content: @Composable () -> Unit) {
-    Card(
+private fun SettingsCard(index: Int = -1, content: @Composable () -> Unit) {
+    // 和其它页保持一致：玻璃卡 + 入场动画
+    GlassCard(
+        backdrop = null,
+        enterIndex = index,
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp)
             .padding(bottom = 8.dp),
     ) {
-        Column { content() }
+        Column(Modifier.fillMaxWidth()) { content() }
     }
 }
 

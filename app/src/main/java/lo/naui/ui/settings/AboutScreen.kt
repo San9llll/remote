@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import lo.naui.ui.component.GlassCard
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -134,7 +135,7 @@ fun AboutScreen(onBack: () -> Unit = {}) {
         }
 
         Section("更新")
-        Group {
+        Group(index = 0) {
             ArrowPreference(
                 title = if (checking) "正在检查…" else "检查更新",
                 summary = "从 GitHub 上问有没有新版本，有的话直接在这里下",
@@ -165,13 +166,13 @@ fun AboutScreen(onBack: () -> Unit = {}) {
         }
 
         Section("版本")
-        Group {
+        Group(index = 1) {
             Row2("应用版本", "v" + BuildConfig.VERSION_NAME)
             Row2("构建号", BuildConfig.VERSION_CODE.toString())
         }
 
         Section("界面")
-        Group {
+        Group(index = 2) {
             Row2("外壳", "全景 · 大图 + 侧边栏")
             Row2("UI 库", "Miuix（同参考项目）")
             Row2("工具链", "AGP 9.3.1 / Kotlin 2.4.10")
@@ -286,8 +287,18 @@ private fun Section(t: String) {
 }
 
 @Composable
-private fun Group(content: @Composable () -> Unit) {
-    Card(Modifier.fillMaxWidth()) { Column { content() } }
+private fun Group(index: Int = -1, content: @Composable () -> Unit) {
+    // 和其它页一致：玻璃卡 + 入场
+    GlassCard(
+        backdrop = null,
+        enterIndex = index,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp)
+            .padding(bottom = 8.dp),
+    ) {
+        Column(Modifier.fillMaxWidth()) { content() }
+    }
 }
 
 @Composable

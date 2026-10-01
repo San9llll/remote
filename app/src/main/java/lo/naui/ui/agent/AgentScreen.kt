@@ -106,6 +106,10 @@ private data class UiMessage(
     /** 模型想了几次 */
     val thinkRounds: Int = 0,
     val usage: lo.naui.agent.AgentApi.Usage = lo.naui.agent.AgentApi.Usage(),
+    /** 思考内容（R1 / o1 这类才有） */
+    val reasoning: String = "",
+    /** 结构化工具记录：label|brief|ok|chars|millis */
+    val steps: List<String> = emptyList(),
 )
 
 /**
@@ -165,13 +169,35 @@ fun AgentScreen(
     LaunchedEffect(AgentStore.activeConvId) {
         val id = AgentStore.activeConvId ?: return@LaunchedEffect
         val stored = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { ChatDb.load(id) }
-        messages = stored.map { UiMessage(it.role, it.text, it.images.size, System.currentTimeMillis()) }
+        messages = stored.map {
+            UiMessage(
+                role = it.role,
+                text = it.text,
+                images = it.images.size,
+                at = System.currentTimeMillis(),
+                toolLog = it.toolLog,
+                thinkRounds = it.thinkRounds,
+                reasoning = it.reasoning,
+                steps = it.toolSteps,
+            )
+        }
         convTitle = ChatDb.titleOf(stored)
     }
 
     fun persist(list: List<UiMessage>) {
         val id = AgentStore.activeConvId ?: return
-        val plain = list.map { ChatMessage(it.role, it.text, imageCount = it.images) }
+        // 这几样必须一起存 —— 不然退出再进来"思考了 N 次"那个按钮就没了
+        val plain = list.map {
+            ChatMessage(
+                role = it.role,
+                text = it.text,
+                imageCount = it.images,
+                reasoning = it.reasoning,
+                thinkRounds = it.thinkRounds,
+                toolLog = it.toolLog,
+                toolSteps = it.steps,
+            )
+        }
         convTitle = ChatDb.titleOf(plain)
         scope.launch(kotlinx.coroutines.Dispatchers.IO) { ChatDb.save(id, convTitle, plain) }
     }
@@ -264,7 +290,17 @@ fun AgentScreen(
         error = null
 
         val convId = AgentStore.activeConvId ?: ChatDb.newId()
-        val plain = history.map { ChatMessage(it.role, it.text, imageCount = it.images) }
+        val plain = history.map {
+            ChatMessage(
+                role = it.role,
+                text = it.text,
+                imageCount = it.images,
+                reasoning = it.reasoning,
+                thinkRounds = it.thinkRounds,
+                toolLog = it.toolLog,
+                toolSteps = it.steps,
+            )
+        }
         convTitle = ChatDb.titleOf(plain)
 
         // 先把对话**同步**落盘，再叫服务 —— 服务是从本地读历史的，

@@ -60,7 +60,7 @@ fun SettingsScreen(
         ) {
             item(key = "theme") {
                 SectionTitle("外观")
-                SettingsCard {
+                SettingsCard(index = 0) {
                     ArrowPreference(
                         title = "主题",
                         summary = prefs.paletteStyle.label() + " · " + prefs.darkMode.label +
@@ -72,7 +72,7 @@ fun SettingsScreen(
 
             item(key = "keepalive") {
                 SectionTitle("后台")
-                SettingsCard {
+                SettingsCard(index = 1) {
                     IndicatorSwitchPreference(
                         checked = lo.naui.agent.AgentTaskStore.keepAlive,
                         onCheckedChange = { lo.naui.agent.AgentTaskStore.updateKeepAlive(it) },
@@ -95,7 +95,7 @@ fun SettingsScreen(
 
             item(key = "about") {
                 SectionTitle("关于")
-                SettingsCard {
+                SettingsCard(index = 2) {
                     ArrowPreference(
                         title = "关于 Nakour",
                         summary = "版本 v" + lo.naui.BuildConfig.VERSION_NAME,
@@ -112,7 +112,7 @@ fun SettingsScreen(
 }
 
 @Composable
-private fun SettingsCard(content: @Composable () -> Unit) {
+private fun SettingsCard(index: Int = -1, content: @Composable () -> Unit) {
     // 和其它页一样：玻璃卡，圆角吃主题里那个参数
     GlassCard(
         backdrop = null,
@@ -120,6 +120,7 @@ private fun SettingsCard(content: @Composable () -> Unit) {
             .fillMaxWidth()
             .padding(horizontal = 12.dp)
             .padding(bottom = 8.dp),
+        enterIndex = index,
     ) {
         Column(Modifier.fillMaxWidth()) { content() }
     }

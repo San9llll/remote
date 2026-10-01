@@ -1,6 +1,7 @@
 package lo.naui.ui.settings
 
 import androidx.compose.foundation.layout.Column
+import lo.naui.ui.component.GlassCard
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -48,7 +49,7 @@ fun RailSettingsScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
         PageHeader(title = "侧栏设置", subtitle = "侧栏模块 · 信息内容", onBack = onBack)
 
         SectionTitle("侧栏模块")
-        RailCard {
+        RailCard(index = 0) {
             IndicatorSwitchPreference(
                 checked = prefs.railShowBattery,
                 onCheckedChange = { prefs.updateRailShowBattery(it) },
@@ -70,7 +71,7 @@ fun RailSettingsScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
         }
 
         SectionTitle("信息内容（最多 " + INFO_LINE_COUNT + " 行）")
-        RailCard {
+        RailCard(index = 1) {
             lines.forEachIndexed { i, m ->
                 ArrowPreference(
                     title = "第 " + (i + 1) + " 行",
@@ -96,13 +97,16 @@ fun RailSettingsScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
 }
 
 @Composable
-private fun RailCard(content: @Composable () -> Unit) {
-    Card(
+private fun RailCard(index: Int = -1, content: @Composable () -> Unit) {
+    // 和其它页一致：玻璃卡 + 入场
+    GlassCard(
+        backdrop = null,
+        enterIndex = index,
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp)
             .padding(bottom = 8.dp),
     ) {
-        Column { content() }
+        Column(Modifier.fillMaxWidth()) { content() }
     }
 }

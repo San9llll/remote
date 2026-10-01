@@ -50,6 +50,7 @@ fun ToolsScreen(
             backdrop = backdrop,
             modifier = Modifier.fillMaxWidth(),
             contentPadding = 6.dp,
+            enterIndex = 0,
         ) {
             Column(Modifier.fillMaxWidth()) {
                 ArrowPreference(

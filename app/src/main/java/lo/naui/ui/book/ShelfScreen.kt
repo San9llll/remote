@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
@@ -150,9 +151,10 @@ fun ShelfScreen(
             contentPadding = PaddingValues(start = 14.dp, end = 14.dp, bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            items(books, key = { it.id }) { book ->
+            itemsIndexed(books, key = { _, b -> b.id }) { i, book ->
                 BookRow(
                     book = book,
+                    enterIndex = i,
                     backdrop = backdrop,
                     onClick = { UiState.saveBook(book.id); onOpenBook(book.id) },
                     onLongClick = { deleteTarget = book },
@@ -163,6 +165,7 @@ fun ShelfScreen(
             item(key = "__add__") {
                 GlassCard(
                     backdrop = backdrop,
+                    enterIndex = books.size,
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(20.dp))
@@ -198,12 +201,14 @@ fun ShelfScreen(
 @Composable
 private fun BookRow(
     book: Book,
+    enterIndex: Int = -1,
     backdrop: com.kyant.backdrop.Backdrop?,
     onClick: () -> Unit,
     onLongClick: () -> Unit = {},
 ) {
     GlassCard(
         backdrop = backdrop,
+        enterIndex = enterIndex,
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(18.dp))

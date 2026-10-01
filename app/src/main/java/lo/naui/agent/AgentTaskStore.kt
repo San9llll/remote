@@ -43,6 +43,26 @@ object AgentTaskStore {
     var state by mutableStateOf(State())
         private set
 
+    /**
+     * 有个危险动作正等着用户点。
+     *
+     * 任务跑在服务里，弹窗归界面管 —— 所以中间得有这么个槽：
+     * 服务把"要确认什么"放这儿然后挂起，界面看到就弹窗，
+     * 用户点完把答案塞回去。
+     */
+    var pendingConfirm by mutableStateOf<ConfirmRequest?>(null)
+
+    data class ConfirmRequest(
+        val hit: DangerGuard.Hit,
+        val answer: kotlinx.coroutines.CompletableDeferred<Boolean>,
+    )
+
+    /** 界面点了之后调它 */
+    fun answerConfirm(ok: Boolean) {
+        pendingConfirm?.answer?.complete(ok)
+        pendingConfirm = null
+    }
+
     /** 跑完的结果先堆在这儿，界面回来时取走 */
     var pendingResult by mutableStateOf<Result?>(null)
         private set

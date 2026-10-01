@@ -1,7 +1,6 @@
 package lo.naui.ui.home
 
 import android.os.Build
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -22,6 +21,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
@@ -31,9 +31,11 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import lo.naui.sys.Metrics
 import lo.naui.sys.Privilege
-import lo.naui.sys.TopPrivilege
 import lo.naui.ui.component.GlassCard
+import top.yukonga.miuix.kmp.basic.PullToRefresh
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import java.time.LocalTime
@@ -41,11 +43,11 @@ import java.time.LocalTime
 /**
  * 首页（全景）。
  *
- * 整页壁纸 + 左侧场景导轨（时钟 / 电量 / 信息）→ hero 卡 → 问候 → 一张卡。
- *
- * 那张卡上只放**当前能拿到的最高权限**，root 和 Shizuku 不会同时出现：
- * 有 root 就写 APatch / KernelSU / Magisk + 对应二进制的版本，
- * 只有 Shizuku 就写 Shizuku + adb 版本，普通用户这一块整个不显示。
+ * 文案按用户要求调过：
+ *  - hero 卡上是大字的 **Nakour**（原来放的是 Late night）
+ *  - 问候那一行改成放时间词（原来放的是 Nakour）
+ *  - 日语下面补一行低透明度的中文翻译
+ *  - "Nakour · 本地版"那行副标题删了
  */
 @Composable
 fun HomeScreen(
@@ -53,17 +55,21 @@ fun HomeScreen(
     wallpaper: ImageBitmap? = null,
     backdrop: com.kyant.backdrop.Backdrop? = null,
 ) {
-    val context = LocalContext.current
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
 
-    var top by remember { mutableStateOf<TopPrivilege?>(null) }
+    var refreshing by remember { mutableStateOf(false) }
+    // 拉一次就把设备/权限信息重新问一遍，这样"下拉刷新"是真有东西刷新的
+    var deviceLine by remember { mutableStateOf("") }
+    var privLine by remember { mutableStateOf("") }
 
-    LaunchedEffect(Unit) {
-        // 权限可能中途变（比如刚给 Shizuku 授权），隔一会儿看一眼
-        while (true) {
-            top = Privilege.topInfo(context)
-            delay(5000)
-        }
+    suspend fun reload() {
+        deviceLine = Build.MANUFACTURER + " " + Build.MODEL + " · Android " + Build.VERSION.RELEASE
+        privLine = runCatching { Privilege.level(ctx).label }.getOrDefault("普通用户")
+        delay(320)
     }
+
+    LaunchedEffect(Unit) { reload() }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val topInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
@@ -74,91 +80,80 @@ fun HomeScreen(
         )
         val scrollState = rememberScrollState()
 
-        Column(
-            Modifier
-                .fillMaxSize()
-                .verticalScroll(scrollState),
-        ) {
-            Spacer(Modifier.height(12.dp))
-
-            // hero 卡：不挂时钟（时钟在左侧导轨上）
-            SceneHero(
-                wallpaper = wallpaper,
-                title = greet().first,
-                subtitle = "Nakour · 本地版",
-                badge = null,
-                scrollState = scrollState,
-                shape = RoundedCornerShape(24.dp),
-                modifier = Modifier
-                    .padding(horizontal = 14.dp)
-                    .fillMaxWidth()
-                    .height(layout.heroHeight),
-            )
-
-            SceneGreeting(
-                greetingLine = "Nakour",
-                quote = greet().second,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 22.dp)
-                    .padding(top = 18.dp),
-            )
-
-            // 当前最高权限 + 设备/系统，合成一张卡
-            GlassCard(
-                backdrop = backdrop,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp),
-                contentPadding = 18.dp,
-            ) {
-                Column(Modifier.fillMaxWidth()) {
-                    val p = top
-                    if (p != null) {
-                        Text(
-                            p.title,
-                            fontSize = 22.sp,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            p.subtitle,
-                            fontSize = 12.sp,
-                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                        )
-
-                        Spacer(Modifier.height(14.dp))
-                        Box(
-                            Modifier
-                                .fillMaxWidth()
-                                .height(1.dp)
-                                .background(MiuixTheme.colorScheme.dividerLine)
-                        )
-                        Spacer(Modifier.height(14.dp))
-                    }
-
-                    SceneStatusStrip(
-                        leftTitle = "设备",
-                        leftValue = Build.MANUFACTURER + " " + Build.MODEL,
-                        rightTitle = "系统",
-                        rightValue = "Android " + Build.VERSION.RELEASE,
-                    )
+        PullToRefresh(
+            isRefreshing = refreshing,
+            onRefresh = {
+                refreshing = true
+                scope.launch {
+                    reload()
+                    refreshing = false
                 }
-            }
+            },
+            modifier = Modifier.fillMaxSize(),
+            refreshTexts = listOf("下拉刷新", "松手刷新", "刷新中…", "刷新完成"),
+        ) {
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .verticalScroll(scrollState),
+            ) {
+                Spacer(Modifier.height(12.dp))
 
-            Spacer(Modifier.height(24.dp))
+                // hero 卡：大字是 Nakour（原来这儿放的是 Late night）
+                SceneHero(
+                    wallpaper = wallpaper,
+                    title = "Nakour",
+                    subtitle = "",
+                    badge = null,
+                    scrollState = scrollState,
+                    shape = RoundedCornerShape(24.dp),
+                    modifier = Modifier
+                        .padding(horizontal = 14.dp)
+                        .fillMaxWidth()
+                        .height(layout.heroHeight),
+                )
+
+                // 问候：上面小字改成时间词（原来是 Nakour），下面是日语 + 中文翻译
+                SceneGreeting(
+                    greetingLine = greet().first,
+                    quote = greet().second,
+                    translation = greet().third,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 22.dp)
+                        .padding(top = 18.dp),
+                )
+
+                SceneStatusStrip(
+                    leftTitle = "设备",
+                    leftValue = deviceLine.ifBlank { Build.MANUFACTURER + " " + Build.MODEL },
+                    rightTitle = "权限",
+                    rightValue = privLine.ifBlank { "—" },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 22.dp)
+                        .padding(bottom = 18.dp),
+                )
+
+                Spacer(Modifier.height(28.dp))
+            }
         }
     }
 }
 
-private fun greet(): Pair<String, String> {
+/**
+ * 问候三件套：时间词 / 日语 / 中文翻译。
+ *
+ * 用户要的是"日语下方左侧有中文小字低透明度翻译"。
+ */
+private fun greet(): Triple<String, String, String> {
     val h = LocalTime.now().hour
     return when (h) {
-        in 0..4 -> "Late night" to "夢の続きを、もう少しだけ"
-        in 5..10 -> "Good morning" to "良い一日になりますように"
-        in 11..13 -> "Good noon" to "お昼だね、ちゃんと食べた？"
-        in 14..17 -> "Good afternoon" to "午後のひとときを、ゆっくりと"
-        in 18..22 -> "Good evening" to "今日も一日、お疲れさま"
-        else -> "Good night" to "そろそろ休もう？"
+        in 0..4 -> Triple("Late night", "夢の続きを、もう少しだけ", "让梦再续一会儿")
+        in 5..10 -> Triple("Good morning", "良い一日になりますように", "愿你今天顺顺利利")
+        in 11..13 -> Triple("Good noon", "お昼だね、ちゃんと食べた？", "中午了，有好好吃饭吗")
+        in 14..17 -> Triple("Good afternoon", "午後のひとときを、ゆっくりと", "午后这段时光，慢慢来")
+        in 18..22 -> Triple("Good evening", "今日も一日、お疲れさま", "今天也辛苦了")
+        else -> Triple("Good night", "そろそろ休もう？", "差不多该休息了吧")
     }
 }

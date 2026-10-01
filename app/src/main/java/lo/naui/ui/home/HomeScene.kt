@@ -178,6 +178,8 @@ fun SceneHero(
 fun SceneGreeting(
     greetingLine: String,
     quote: String,
+    /** 日语下面那行中文小字，低透明度 */
+    translation: String = "",
     modifier: Modifier = Modifier,
 ) {
     Column(modifier) {
@@ -191,6 +193,15 @@ fun SceneGreeting(
             text = quote,
             style = MiuixTheme.textStyles.title3,
         )
+        if (translation.isNotBlank()) {
+            Spacer(Modifier.height(5.dp))
+            Text(
+                text = translation,
+                fontSize = 12.sp,
+                // 低透明度的小字，靠左对齐
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.55f),
+            )
+        }
         Spacer(Modifier.height(18.dp))
     }
 }

@@ -191,8 +191,12 @@ fun HomeSceneRail(
             val compact = maxHeight < SceneShortHeight
             val iconsOnly = compact && maxHeight < SceneRailLabelledHeight
 
-            val totalHeight = maxHeight.value.coerceAtLeast(1f)
-            val totalWidth = maxWidth.value.coerceAtLeast(1f)
+            // ⚠️ 归一化必须用**整块屏幕**的尺寸，不能用这条导轨自己的 ——
+            // 导轨只有 68dp 宽，拿它当分母算出来的坐标是错的（方案 B 的 bug 就在这儿）
+            val screenW = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp
+                .coerceAtLeast(1)
+            val screenH = androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp
+                .coerceAtLeast(1)
 
             Column(
                 modifier = Modifier
@@ -261,8 +265,8 @@ fun HomeSceneRail(
                         onClick = {
                             onSelectAt(
                                 d,
-                                (cx / totalWidth).coerceIn(0f, 1f),
-                                (cy / totalHeight).coerceIn(0f, 1f),
+                                (cx / screenW).coerceIn(0f, 1f),
+                                (cy / screenH).coerceIn(0f, 1f),
                             )
                         },
                     )

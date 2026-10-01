@@ -82,12 +82,22 @@ class AgentTaskService : Service() {
                 AgentTaskStore.progress(p)
                 notify(buildNotification(p))
             },
-            // 危险动作要问用户 —— 后台跑的时候没法弹窗，所以先拒掉，
-            // 让模型知道"现在没人确认"，它自己会换办法
+            // 危险动作：把请求挂到 Store 上，等界面弹窗让用户点
             askUser = { hit ->
-                // 后台跑的时候没法弹窗，先拒掉，让模型知道"这会儿没人确认"
-                AgentTaskStore.progress("需要你确认（" + hit.category.label + "）—— 回聊天页重发一次吧")
-                false
+                val gate = kotlinx.coroutines.CompletableDeferred<Boolean>()
+                AgentTaskStore.pendingConfirm = AgentTaskStore.ConfirmRequest(hit, gate)
+                AgentTaskStore.progress("等你确认：" + hit.category.label)
+                notify(buildNotification("等你确认：" + hit.category.label))
+
+                // 最多等 90 秒 —— 用户可能压根没看手机，别一直吊着
+                val ok = kotlinx.coroutines.withTimeoutOrNull(90_000L) { gate.await() } ?: false
+                AgentTaskStore.pendingConfirm = null
+                if (ok) {
+                    AgentTaskStore.progress("你同意了，继续…")
+                } else {
+                    AgentTaskStore.progress("没等到确认，跳过这个动作")
+                }
+                ok
             },
         )
 

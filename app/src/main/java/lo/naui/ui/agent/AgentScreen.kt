@@ -126,8 +126,8 @@ fun AgentScreen(
     var error by remember { mutableStateOf<String?>(null) }
     var sheetOpen by remember { mutableStateOf(false) }
     // 危险动作的确认：AI 那边挂起，等用户点
-    var confirmHit by remember { mutableStateOf<lo.naui.agent.DangerGuard.Hit?>(null) }
-    var confirmAnswer by remember { mutableStateOf<kotlinx.coroutines.CompletableDeferred<Boolean>?>(null) }
+    // 危险确认现在从 Store 上取 —— 任务在服务里跑，界面只负责弹
+    val confirmHit = lo.naui.agent.AgentTaskStore.pendingConfirm?.hit
     val listState = rememberLazyListState()
 
     // 一个文件按钮就够了（图片和文本都从这儿进，按类型自己分辨）
@@ -537,7 +537,7 @@ fun AgentScreen(
                             .weight(1f)
                             .clip(RoundedCornerShape(50))
                             .background(MiuixTheme.colorScheme.surfaceContainerHigh)
-                            .clickable { confirmAnswer?.complete(false) }
+                            .clickable { lo.naui.agent.AgentTaskStore.answerConfirm(false) }
                             .padding(vertical = 12.dp),
                         contentAlignment = Alignment.Center,
                     ) { Text("拒绝", fontSize = 13.5.sp) }
@@ -547,7 +547,7 @@ fun AgentScreen(
                             .weight(1f)
                             .clip(RoundedCornerShape(50))
                             .background(MiuixTheme.colorScheme.error)
-                            .clickable { confirmAnswer?.complete(true) }
+                            .clickable { lo.naui.agent.AgentTaskStore.answerConfirm(true) }
                             .padding(vertical = 12.dp),
                         contentAlignment = Alignment.Center,
                     ) { Text("允许执行", fontSize = 13.5.sp, color = Color.White) }

@@ -322,102 +322,6 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
                             .padding(start = if (showSceneRail) sceneRailWidth else 0.dp),
                     ) {
                         // ---- 方案 B：旧页留底层，新页当一张玻璃卡从点击处长出来 ----
-                        if (prefs.transitionStyle == lo.naui.ui.theme.TransitionStyle.Radial &&
-                            prevPage != null
-                        ) {
-                            Box(Modifier.fillMaxSize()) {
-                                // 底层：上一页，静静待着
-                                val prev = prevPage
-                                if (prev != null) {
-                                    Box(Modifier.fillMaxSize()) {
-                                        pageFor(prev.first, prev.second)
-                                    }
-                                }
-
-                                // 上层：新页 + 玻璃，圆形展开
-                                // Animatable 不是 State，别用 by
-                                val anim = remember(spreadTick) {
-                                    androidx.compose.animation.core.Animatable(0f)
-                                }
-                                LaunchedEffect(spreadTick) {
-                                    if (spreadTick > 0) {
-                                        anim.snapTo(0f)
-                                        anim.animateTo(
-                                            1f,
-                                            androidx.compose.animation.core.tween(
-                                                (420 / prefs.transitionSpeed.coerceIn(0.4f, 3f))
-                                                    .toInt().coerceAtLeast(80),
-                                                easing = FastOutSlowInEasing,
-                                            ),
-                                        )
-                                        prevPage = null
-                                    }
-                                }
-
-                                val prog = anim.value
-                                Box(
-                                    Modifier
-                                        .fillMaxSize()
-                                        .drawWithContent {
-                                            if (prog >= 1f) {
-                                                drawContent()
-                                                return@drawWithContent
-                                            }
-                                            // 以点击点为圆心，圆形裁剪出"已经渲染好的部分"
-                                            val cx = size.width * spreadOrigin.x
-                                            val cy = size.height * spreadOrigin.y
-                                            // 半径要够盖到最远的角
-                                            val maxR = maxOf(
-                                                kotlin.math.hypot(cx, cy),
-                                                kotlin.math.hypot(size.width - cx, cy),
-                                                kotlin.math.hypot(cx, size.height - cy),
-                                                kotlin.math.hypot(size.width - cx, size.height - cy),
-                                            )
-                                            val r = maxR * prog
-                                            val path = androidx.compose.ui.graphics.Path().apply {
-                                                addOval(
-                                                    androidx.compose.ui.geometry.Rect(
-                                                        cx - r, cy - r, cx + r, cy + r
-                                                    )
-                                                )
-                                            }
-                                            clipPath(path) { this@drawWithContent.drawContent() }
-                                        },
-                                ) {
-                                    pageFor(current, sub)
-
-                                    // 圆的边缘垫一圈液态玻璃的光，让"长出来的边"看得见
-                                    if (prog < 1f) {
-                                        androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
-                                            val cx = size.width * spreadOrigin.x
-                                            val cy = size.height * spreadOrigin.y
-                                            val maxR = maxOf(
-                                                kotlin.math.hypot(cx, cy),
-                                                kotlin.math.hypot(size.width - cx, cy),
-                                                kotlin.math.hypot(cx, size.height - cy),
-                                                kotlin.math.hypot(size.width - cx, size.height - cy),
-                                            )
-                                            val r = maxR * prog
-                                            drawCircle(
-                                                brush = Brush.radialGradient(
-                                                    colors = listOf(
-                                                        Color.Transparent,
-                                                        Color.White.copy(alpha = 0.28f),
-                                                        Color.Transparent,
-                                                    ),
-                                                    center = androidx.compose.ui.geometry.Offset(cx, cy),
-                                                    radius = r.coerceAtLeast(1f),
-                                                ),
-                                                radius = r,
-                                                style = androidx.compose.ui.graphics.drawscope.Stroke(
-                                                    width = 26.dp.toPx()
-                                                ),
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        } else {
                         // 其余情况（没背景切换 / 子页）照旧走 AnimatedContent
                         AnimatedContent(
                             // 必须给尺寸：不给的话子项里的滚动容器
@@ -503,7 +407,6 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
                             val (dest, subState) = target
                             pageFor(dest, subState)
                         }
-                        }
                     }
                 }
                 AnimatedVisibility(visible = standardBottomBar) {
@@ -519,6 +422,70 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
                                 label = d.label,
                             )
                         }
+                    }
+                }
+            }
+
+            // ---- 方案 B 的扩散层 ----
+            //
+            // 放在**最外层**、zIndex 0.5 —— 侧栏是 1，所以它盖不到侧栏，也不会被
+            // 内容区的 start padding 影响。坐标是按整屏归一化的，圆的圆心
+            // 就是手指点下去的那个位置。
+            if (prefs.transitionStyle == lo.naui.ui.theme.TransitionStyle.Radial && spreadTick > 0) {
+                val anim = remember(spreadTick) {
+                    androidx.compose.animation.core.Animatable(0f)
+                }
+                LaunchedEffect(spreadTick) {
+                    anim.snapTo(0f)
+                    anim.animateTo(
+                        1f,
+                        androidx.compose.animation.core.tween(
+                            (460 / prefs.transitionSpeed.coerceIn(0.4f, 3f))
+                                .toInt().coerceAtLeast(90),
+                            easing = FastOutSlowInEasing,
+                        ),
+                    )
+                }
+                val prog = anim.value
+
+                if (prog < 1f) {
+                    androidx.compose.foundation.Canvas(
+                        Modifier
+                            .fillMaxSize()
+                            .zIndex(0.5f)
+                    ) {
+                        val cx = size.width * spreadOrigin.x
+                        val cy = size.height * spreadOrigin.y
+                        val maxR = maxOf(
+                            kotlin.math.hypot(cx, cy),
+                            kotlin.math.hypot(size.width - cx, cy),
+                            kotlin.math.hypot(cx, size.height - cy),
+                            kotlin.math.hypot(size.width - cx, size.height - cy),
+                        )
+                        val r = (maxR * prog).coerceAtLeast(1f)
+
+                        // 没扩到的地方压一层暗，界面上就是"这块还没渲染"
+                        drawCircle(
+                            color = Color.Black.copy(alpha = 0.34f * (1f - prog)),
+                            radius = r,
+                            center = androidx.compose.ui.geometry.Offset(cx, cy),
+                            style = androidx.compose.ui.graphics.drawscope.Fill,
+                        )
+                        // 玻璃的边：一圈径向渐变的白，扩散的边界就是它
+                        drawCircle(
+                            brush = Brush.radialGradient(
+                                colors = listOf(
+                                    Color.Transparent,
+                                    Color.White.copy(alpha = 0.26f * (1f - prog * 0.6f)),
+                                    Color.Transparent,
+                                ),
+                                center = androidx.compose.ui.geometry.Offset(cx, cy),
+                                radius = r,
+                            ),
+                            radius = r,
+                            center = androidx.compose.ui.geometry.Offset(cx, cy),
+                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 18.dp.toPx()),
+                        )
                     }
                 }
             }

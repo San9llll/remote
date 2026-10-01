@@ -34,6 +34,8 @@ object AgentChat {
         maxTokens: Int,
         temperature: Float,
         onProgress: (String) -> Unit,
+        /** 碰上危险动作时问用户（策略是"每次问"才会调） */
+        askUser: (suspend (String) -> Boolean)? = null,
     ): Result<AgentRun> = withContext(Dispatchers.IO) {
         runCatching {
             val tools = AgentTools.toolsFor(env)
@@ -64,7 +66,7 @@ object AgentChat {
                 reply.toolCalls.forEach { call ->
                     val brief = briefArgs(call.args)
                     onProgress("正在用 " + call.name + " " + brief)
-                    val result = AgentTools.run(ctx, env, call.name, call.args)
+                    val result = AgentTools.run(ctx, env, call.name, call.args, askUser)
                     log += "▸ " + call.name + " " + brief + "\n" + result.output.take(1500)
                     messages.put(
                         AgentApi.toolMessage(

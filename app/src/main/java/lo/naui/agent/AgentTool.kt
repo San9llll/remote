@@ -99,7 +99,40 @@ object AgentTools {
 
     /* ================= 执行 ================= */
 
+    /**
+     * 要不要先问用户。
+     *
+     * [askUser] 由界面给：收一个"为什么危险"的描述，回一个同意/不同意。
+     * 策略是"每次问"才会调它。
+     */
     suspend fun run(
+        ctx: Context,
+        env: AgentEnv,
+        name: String,
+        args: JSONObject,
+        askUser: (suspend (String) -> Boolean)? = null,
+    ): ToolResult {
+        // 先过危险闸门
+        DangerGuard.risk(name, args)?.let { reason ->
+            when (AgentStore.dangerPolicy) {
+                DangerGuard.Policy.Deny -> return ToolResult(
+                    false,
+                    "这个动作被安全策略挡下来了（" + reason + "）。" +
+                        "如果确实要做，让用户在 Agent 配置里把「危险操作」改成每次都问或者放行。",
+                )
+                DangerGuard.Policy.Allow -> Unit
+                DangerGuard.Policy.Ask -> {
+                    val ok = askUser?.invoke(reason) ?: true
+                    if (!ok) {
+                        return ToolResult(false, "用户拒绝了这次操作（" + reason + "），换个办法或者先问清楚。")
+                    }
+                }
+            }
+        }
+        return runUnchecked(ctx, env, name, args)
+    }
+
+    private suspend fun runUnchecked(
         ctx: Context,
         env: AgentEnv,
         name: String,

@@ -47,6 +47,9 @@ object AgentStore {
         temperature = p.getFloat("temperature", 0.7f)
         maxTokens = p.getInt("max_tokens", 1_000_000)
         env = p.getString("env", AgentEnv.Sandbox.id)?.let { AgentEnv.of(it) } ?: AgentEnv.Sandbox
+        dangerPolicy = p.getString("danger", "ask")
+            ?.let { id -> DangerGuard.Policy.entries.firstOrNull { it.id == id } }
+            ?: DangerGuard.Policy.Ask
         loadPersonas(p)
     }
 
@@ -90,6 +93,15 @@ object AgentStore {
     fun updateEnv(v: AgentEnv) {
         env = v
         sp?.edit()?.putString("env", v.id)?.apply()
+    }
+
+    /** 危险动作怎么办（su / rm -rf 这些） */
+    var dangerPolicy by mutableStateOf(DangerGuard.Policy.Ask)
+        private set
+
+    fun updateDangerPolicy(v: DangerGuard.Policy) {
+        dangerPolicy = v
+        sp?.edit()?.putString("danger", v.id)?.apply()
     }
 
     /* ---------- 人格 ---------- */

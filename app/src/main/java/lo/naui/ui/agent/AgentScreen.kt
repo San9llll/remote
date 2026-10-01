@@ -106,6 +106,9 @@ fun AgentScreen(
     var progress by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var sheetOpen by remember { mutableStateOf(false) }
+    // 危险动作的确认：AI 那边挂起，等用户点
+    var confirmReason by remember { mutableStateOf<String?>(null) }
+    var confirmAnswer by remember { mutableStateOf<kotlinx.coroutines.CompletableDeferred<Boolean>?>(null) }
     val listState = rememberLazyListState()
 
     // 一个文件按钮就够了（图片和文本都从这儿进，按类型自己分辨）
@@ -183,6 +186,16 @@ fun AgentScreen(
                 maxTokens = AgentStore.maxTokens,
                 temperature = AgentStore.temperature,
                 onProgress = { progress = it },
+                askUser = { reason ->
+                    // 挂在这儿等用户点 —— 工具循环在 IO 线程上等着
+                    val gate = kotlinx.coroutines.CompletableDeferred<Boolean>()
+                    confirmReason = reason
+                    confirmAnswer = gate
+                    val ok = gate.await()
+                    confirmReason = null
+                    confirmAnswer = null
+                    ok
+                },
             )
                 .onSuccess { run ->
                     val next = messages + UiMessage("assistant", run.reply, toolLog = run.toolLog)
@@ -349,6 +362,68 @@ fun AgentScreen(
     if (sheetOpen) {
         ModelSheet(onDismiss = { sheetOpen = false })
     }
+
+    // ---- 危险动作确认 ----
+    confirmReason?.let { reason ->
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.55f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(
+                Modifier
+                    .padding(horizontal = 22.dp)
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(MiuixTheme.colorScheme.surface)
+                    .padding(20.dp),
+            ) {
+                Text("⚠️ 它要动手了", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    reason,
+                    fontSize = 13.sp,
+                    color = MiuixTheme.colorScheme.error,
+                    fontWeight = FontWeight.Medium,
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "确认了就会真的执行。不放心的话先拒绝，让它换个说法讲清楚再决定。",
+                    fontSize = 11.5.sp,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                )
+                Spacer(Modifier.height(16.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Box(
+                        Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(50))
+                            .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+                            .clickable {
+                                confirmAnswer?.complete(false)
+                            }
+                            .padding(vertical = 12.dp),
+                        contentAlignment = Alignment.Center,
+                    ) { Text("别动", fontSize = 13.5.sp) }
+
+                    Box(
+                        Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(50))
+                            .background(MiuixTheme.colorScheme.error)
+                            .clickable {
+                                confirmAnswer?.complete(true)
+                            }
+                            .padding(vertical = 12.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("允许", fontSize = 13.5.sp, color = Color.White)
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -381,7 +456,8 @@ private fun Bubble(m: UiMessage) {
         val shape = RoundedCornerShape(16.dp)
         Box(
             Modifier
-                .widthIn(max = 310.dp)
+                // 上限 300dp，但**按内容收缩**，别填满
+                .widthIn(max = 300.dp)
                 .clip(shape)
                 .border(
                     width = 1.2.dp,
@@ -392,7 +468,7 @@ private fun Bubble(m: UiMessage) {
         ) {
             GlassCard(
                 backdrop = null,
-                modifier = Modifier.fillMaxWidth(),
+                // 这里原来有个 fillMaxWidth()，把气泡撑满了 —— 去掉
                 shape = shape,
                 contentPadding = 12.dp,
             ) {
@@ -613,6 +689,40 @@ private fun ModelSheet(onDismiss: () -> Unit) {
                     fontSize = 10.sp,
                     color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                 )
+            }
+            Spacer(Modifier.height(4.dp))
+        }
+
+        Spacer(Modifier.height(16.dp))
+        // 危险操作怎么办（su / rm -rf 这些）
+        Text("危险操作", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+        Spacer(Modifier.height(4.dp))
+        lo.naui.agent.DangerGuard.Policy.entries.forEach { pol ->
+            val on = AgentStore.dangerPolicy == pol
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(
+                        if (on) MiuixTheme.colorScheme.primary.copy(alpha = 0.14f)
+                        else MiuixTheme.colorScheme.surfaceContainerHigh
+                    )
+                    .clickable { AgentStore.updateDangerPolicy(pol) }
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        (if (on) "● " else "○ ") + pol.label,
+                        fontSize = 12.5.sp,
+                        color = if (on) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        pol.summary,
+                        fontSize = 10.sp,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    )
+                }
             }
             Spacer(Modifier.height(4.dp))
         }

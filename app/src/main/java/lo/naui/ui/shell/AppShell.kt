@@ -40,6 +40,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.TransformOrigin
@@ -330,7 +334,8 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
                                 }
 
                                 // 上层：新页 + 玻璃，圆形展开
-                                var anim by remember(spreadTick) {
+                                // Animatable 不是 State，别用 by
+                                val anim = remember(spreadTick) {
                                     androidx.compose.animation.core.Animatable(0f)
                                 }
                                 LaunchedEffect(spreadTick) {

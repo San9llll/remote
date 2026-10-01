@@ -154,6 +154,13 @@ fun AgentScreen(
         convTitle = ChatDb.titleOf(stored)
     }
 
+    fun persist(list: List<UiMessage>) {
+        val id = AgentStore.activeConvId ?: return
+        val plain = list.map { ChatMessage(it.role, it.text, imageCount = it.images) }
+        convTitle = ChatDb.titleOf(plain)
+        scope.launch(kotlinx.coroutines.Dispatchers.IO) { ChatDb.save(id, convTitle, plain) }
+    }
+
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
     }
@@ -197,13 +204,6 @@ fun AgentScreen(
                 }
             }
         }
-    }
-
-    fun persist(list: List<UiMessage>) {
-        val id = AgentStore.activeConvId ?: return
-        val plain = list.map { ChatMessage(it.role, it.text, imageCount = it.images) }
-        convTitle = ChatDb.titleOf(plain)
-        scope.launch(kotlinx.coroutines.Dispatchers.IO) { ChatDb.save(id, convTitle, plain) }
     }
 
     fun send() {

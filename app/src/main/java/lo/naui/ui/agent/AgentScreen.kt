@@ -2,6 +2,14 @@
 
 package lo.naui.ui.agent
 
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.infiniteRepeatable
+import rememberInfiniteTransition
+import androidx.compose.animation.core.RepeatMode
+import LinearEasing
+import infiniteRepeatable
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.alpha
 import androidx.compose.foundation.layout.imePadding
@@ -844,13 +852,13 @@ private fun RunningBar(label: String, hint: String) {
     val barColor = MiuixTheme.colorScheme.primary
     val trackColor = MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.18f)
 
-    val transition = androidx.compose.animation.core.rememberInfiniteTransition(label = "bar")
+    val transition = rememberInfiniteTransition(label = "bar")
     val phase by transition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
-        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
-            animation = androidx.compose.animation.core.tween(1100, easing = androidx.compose.animation.core.LinearEasing),
-            repeatMode = androidx.compose.animation.core.RepeatMode.Restart,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1100, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart,
         ),
         label = "bar_phase",
     )

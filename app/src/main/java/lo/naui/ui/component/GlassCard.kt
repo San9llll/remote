@@ -135,8 +135,10 @@ fun GlassCard(
             modifier = modifier
                 // 入场：从侧栏那一侧滑进来，落位回弹
                 .graphicsLayer {
-                    translationX = -enterShift * 64f.dp.toPx()
-                    alpha = enterFade
+                    // ⚠️ 必须写 this. —— 这个文件里本来就有个 val alpha（玻璃的不透明度），
+                    // 而 Kotlin 里**局部变量优先于接收者成员**，光写 alpha = 会去改那个 val
+                    this.translationX = -enterShift * 64f.dp.toPx()
+                    this.alpha = enterFade
                 }
                 .clip(realShape)
                 .drawBackdrop(
@@ -165,8 +167,10 @@ fun GlassCard(
             modifier = modifier
                 // 入场：从侧栏那一侧滑进来，落位回弹
                 .graphicsLayer {
-                    translationX = -enterShift * 64f.dp.toPx()
-                    alpha = enterFade
+                    // ⚠️ 必须写 this. —— 这个文件里本来就有个 val alpha（玻璃的不透明度），
+                    // 而 Kotlin 里**局部变量优先于接收者成员**，光写 alpha = 会去改那个 val
+                    this.translationX = -enterShift * 64f.dp.toPx()
+                    this.alpha = enterFade
                 }
                 .clip(realShape)
                 .background(fill),

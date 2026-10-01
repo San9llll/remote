@@ -67,7 +67,14 @@ class MainActivity : ComponentActivity() {
             Shortcuts.init(context)
             NakourTheme(p) {
                 // 不要开屏了，直接进主界面
-                AppShell(p)
+                // backdrop 提到这一层：GlassCard 通过 CompositionLocal 自己取，
+                // 这样设置页 / Agent 页这些不用一页页往下传，也不会漏
+                val backdrop = com.kyant.backdrop.backdrops.rememberLayerBackdrop()
+                androidx.compose.runtime.CompositionLocalProvider(
+                    lo.naui.ui.component.LocalGlassBackdrop provides backdrop
+                ) {
+                    AppShell(p, backdrop)
+                }
             }
         }
     }

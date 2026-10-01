@@ -141,10 +141,24 @@ object AgentApi {
 
     /* ================= 带工具的调用 ================= */
 
+    /** 一次调用的用量（各家都按 OpenAI 的 usage 字段给） */
+    data class Usage(
+        /** 输入里命中缓存的 token（有的家给，没有就是 0） */
+        val cachedTokens: Int = 0,
+        /** 输入里没命中缓存的 token */
+        val inputTokens: Int = 0,
+        val outputTokens: Int = 0,
+        /** 这次请求花了多久 */
+        val millis: Long = 0,
+    ) {
+        val totalIn: Int get() = cachedTokens + inputTokens
+    }
+
     /** 模型回的一条：要么是话，要么是要调工具 */
     data class Reply(
         val text: String,
         val toolCalls: List<Call>,
+        val usage: Usage = Usage(),
     )
 
     data class Call(val id: String, val name: String, val args: JSONObject)
@@ -193,18 +207,36 @@ object AgentApi {
             throw IllegalStateException("连不上 " + url.host + "：" + (it.message ?: ""))
         }
 
+        val startedAt = System.currentTimeMillis()
         val code = conn.responseCode
         val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
             ?.bufferedReader()?.use { it.readText() }.orEmpty()
+        val elapsed = System.currentTimeMillis() - startedAt
         conn.disconnect()
         if (code !in 200..299) {
             val msg = runCatching { JSONObject(body).optJSONObject("error")?.optString("message") }.getOrNull()
             throw IllegalStateException("HTTP " + code + "：" + (msg?.takeIf { it.isNotBlank() } ?: body.take(300)))
         }
 
+        val json = JSONObject(body)
         val msg = runCatching {
-            JSONObject(body).optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message")
+            json.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message")
         }.getOrNull() ?: throw IllegalStateException("返回里没有 message")
+
+        // 用量：prompt_tokens_details.cached_tokens 是命中缓存那部分
+        val usage = runCatching {
+            val u = json.optJSONObject("usage")
+            val prompt = u?.optInt("prompt_tokens", 0) ?: 0
+            val cached = u?.optJSONObject("prompt_tokens_details")?.optInt("cached_tokens", 0)
+                ?: u?.optInt("prompt_cache_hit_tokens", 0)
+                ?: 0
+            Usage(
+                cachedTokens = cached,
+                inputTokens = (prompt - cached).coerceAtLeast(0),
+                outputTokens = u?.optInt("completion_tokens", 0) ?: 0,
+                millis = elapsed,
+            )
+        }.getOrDefault(Usage(millis = elapsed))
 
         val text = msg.optString("content", "")
         val calls = mutableListOf<Call>()
@@ -220,7 +252,7 @@ object AgentApi {
             }
         }
 
-        Reply(text, calls)
+        Reply(text, calls, usage)
     }
 
     /** 问服务商有哪些模型（GET /v1/models） */

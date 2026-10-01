@@ -9,8 +9,12 @@ import org.json.JSONObject
 /** 一轮跑完的结果 */
 data class AgentRun(
     val reply: String,
-    /** 中间调了哪些工具、结果咋样（给界面展示用） */
+    /** 中间调了哪些工具（只留工具名 + 一句摘要，**不外露命令原文**） */
     val toolLog: List<String>,
+    /** 这一轮里模型想了几次（就是发了几次请求） */
+    val thinkRounds: Int = 0,
+    /** 这一轮总共的用量（多轮请求累加） */
+    val usage: AgentApi.Usage = AgentApi.Usage(),
 )
 
 /**
@@ -50,14 +54,31 @@ object AgentChat {
 
             val log = mutableListOf<String>()
             var round = 0
+            var cached = 0
+            var input = 0
+            var output = 0
+            var spent = 0L
+
+            fun addUsage(u: AgentApi.Usage) {
+                cached += u.cachedTokens
+                input += u.inputTokens
+                output += u.outputTokens
+                spent += u.millis
+            }
 
             while (round++ < MAX_ROUNDS) {
                 onProgress(if (round == 1) "在想…" else "第 " + round + " 轮…")
                 val reply = AgentApi.raw(system, messages, tools, temperature, maxTokens)
+                addUsage(reply.usage)
 
                 if (reply.toolCalls.isEmpty()) {
                     val text = reply.text.ifBlank { "（模型没说话）" }
-                    return@runCatching AgentRun(text, log)
+                    return@runCatching AgentRun(
+                        reply = text,
+                        toolLog = log,
+                        thinkRounds = round - 1,
+                        usage = AgentApi.Usage(cached, input, output, spent),
+                    )
                 }
 
                 // 把它"要调工具"那条原样记进去，否则下一轮上下文对不上
@@ -67,7 +88,11 @@ object AgentChat {
                     val brief = briefArgs(call.args)
                     onProgress("正在用 " + call.name + " " + brief)
                     val result = AgentTools.run(ctx, env, call.name, call.args, askUser)
-                    log += "▸ " + call.name + " " + brief + "\n" + result.output.take(1500)
+                    // 只记"用了什么工具、成没成、多大动静"，命令原文不外露
+                    log += "▸ " + friendlyName(call.name) + " · " + brief +
+                        "\n    " + (if (result.ok) "完成" else "失败") +
+                        " · 返回 " + result.output.length + " 字" +
+                        if (result.ok) "" else "：" + result.output.take(200)
                     messages.put(
                         AgentApi.toolMessage(
                             call.id,
@@ -78,8 +103,23 @@ object AgentChat {
                 }
             }
 
-            AgentRun("（工具调了 " + MAX_ROUNDS + " 轮还没完，先停一下）", log)
+            AgentRun(
+                reply = "（工具调了 " + MAX_ROUNDS + " 轮还没完，先停一下）",
+                toolLog = log,
+                thinkRounds = round,
+                usage = AgentApi.Usage(cached, input, output, spent),
+            )
         }
+    }
+
+    /** 工具的内部名字 → 人话 */
+    private fun friendlyName(name: String): String = when (name) {
+        AgentTools.SHELL -> "执行命令"
+        AgentTools.READ -> "读文件"
+        AgentTools.WRITE -> "写文件"
+        AgentTools.LIST -> "看目录"
+        AgentTools.DEVICE -> "看设备信息"
+        else -> name
     }
 
     /** 参数摘要，给界面显示一行 */

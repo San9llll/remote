@@ -132,6 +132,21 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
             }
         }
     }
+    // 设置页背景（设置及其所有子页用）
+    val settingsPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.GetContent(),
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                val target = java.io.File(ctx.filesDir, "settings_bg.jpg")
+                ctx.contentResolver.openInputStream(uri)?.use { input ->
+                    target.outputStream().use { output -> input.copyTo(output) }
+                }
+                prefs.updateSettingsImage(target.absolutePath)
+            }
+        }
+    }
+
     // 页面背景（模块 / 概览 / 设置 三页用，不影响主页和侧边栏）
     val pagePicker = androidx.activity.compose.rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.GetContent(),
@@ -387,6 +402,24 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
                             title = "清除主页大图",
                             summary = "回到主题渐变兜底",
                             onClick = { prefs.updateHomeImage("") },
+                        )
+                    }
+
+                    ArrowPreference(
+                        title = "设置页背景",
+                        summary = if (prefs.settingsImage.isBlank()) {
+                            "还没选 · 设置里的所有子页都用它"
+                        } else {
+                            "已设置 · 用于设置及其所有子页"
+                        },
+                        startAction = { SettingsIcon(MiuixIcons.Photos) },
+                        onClick = { settingsPicker.launch("image/*") },
+                    )
+                    if (prefs.settingsImage.isNotBlank()) {
+                        ArrowPreference(
+                            title = "清除设置页背景",
+                            summary = "回到主题底色",
+                            onClick = { prefs.updateSettingsImage("") },
                         )
                     }
 

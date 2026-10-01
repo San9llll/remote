@@ -93,7 +93,7 @@ private enum class Sub {
  * - **Standard**：窄屏底部 NavigationBar，宽屏侧边 NavigationRail
  */
 @Composable
-fun AppShell(prefs: ThemePrefs) {
+fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.Backdrop) {
     var current by remember { mutableStateOf(Dest.Home) }
     var sub by remember { mutableStateOf(Sub.None) }
     // 书柜里当前翻开的是哪本
@@ -142,6 +142,20 @@ fun AppShell(prefs: ThemePrefs) {
         pageBitmap = loadBitmap(prefs.contentImage)?.asImageBitmap()
     }
 
+    // 设置页（含它所有子页）单独的底图
+    var settingsBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(prefs.settingsImage) {
+        settingsBitmap = loadBitmap(prefs.settingsImage)?.asImageBitmap()
+    }
+
+    // Agent 消息里点了文件路径 → 切到文件管理（目录已经被 UI 那边写好了）
+    val openFilesTick = lo.naui.sys.UiState.openFilesTick
+    LaunchedEffect(openFilesTick) {
+        if (openFilesTick > 0) {
+            sub = Sub.Files
+        }
+    }
+
     // 返回键先回上一级，别一按就退出 App
     BackHandler(enabled = sub != Sub.None || current != Dest.Home) {
         if (sub != Sub.None) {
@@ -151,7 +165,12 @@ fun AppShell(prefs: ThemePrefs) {
         }
     }
 
-    val backdrop = rememberLayerBackdrop()
+    // 设置系：设置页本身 + 它下面所有子页，都吃「设置页背景」
+    val isSettingsPage = when (sub) {
+        Sub.Theme, Sub.About, Sub.AgentConfig, Sub.Personas -> true
+        Sub.None -> current == Dest.Settings
+        else -> false
+    }
 
     // 内容页底图只在「功能 / 概览 / 设置」这几页铺，主页和侧边栏不受影响
     val showPageBg = sub == Sub.None && current != Dest.Home && pageBitmap != null
@@ -245,6 +264,8 @@ fun AppShell(prefs: ThemePrefs) {
                     railWidth = if (showSceneRail) sceneRailWidth else 0.dp,
                     pageBitmap = pageBitmap,
                     showPageBg = showPageBg,
+                    settingsBitmap = settingsBitmap,
+                    showSettingsBg = isSettingsPage,
                     blurred = false,
                     darkScrim = isDarkTheme,
                 )
@@ -257,6 +278,8 @@ fun AppShell(prefs: ThemePrefs) {
                 railWidth = if (showSceneRail) sceneRailWidth else 0.dp,
                 pageBitmap = pageBitmap,
                 showPageBg = showPageBg,
+                settingsBitmap = settingsBitmap,
+                showSettingsBg = isSettingsPage,
                 blurred = true,
                 darkScrim = isDarkTheme,
             )
@@ -417,6 +440,8 @@ private fun AppBackdropLayer(
     railWidth: androidx.compose.ui.unit.Dp,
     pageBitmap: ImageBitmap?,
     showPageBg: Boolean,
+    settingsBitmap: ImageBitmap?,
+    showSettingsBg: Boolean,
     blurred: Boolean,
     darkScrim: Boolean,
 ) {
@@ -432,10 +457,15 @@ private fun AppBackdropLayer(
             Box(Modifier.fillMaxSize().background(MiuixTheme.colorScheme.surface))
         }
 
-        if (showPageBg && pageBitmap != null) {
+        // 设置页底图优先 —— 设置系那些页盖过内容页背景
+        val useSettings = showSettingsBg && settingsBitmap != null
+        val usePage = !useSettings && showPageBg && pageBitmap != null
+        val bg = if (useSettings) settingsBitmap else pageBitmap
+
+        if ((useSettings || usePage) && bg != null) {
             Box(Modifier.fillMaxSize().padding(start = railWidth)) {
                 Image(
-                    bitmap = pageBitmap,
+                    bitmap = bg,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier

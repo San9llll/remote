@@ -262,6 +262,19 @@ class ThemePrefs(context: Context) {
     }
 
     /**
+     * 设置页背景。
+     *
+     * 用户点名要的：给设置页单独配一张底图，
+     * 设置里的**所有子页**（主题 / 关于 / 侧栏设置 / 人格 / Agent 配置 …）都用它。
+     */
+    var settingsImage by mutableStateOf(sp.getString("settings_image", "") ?: "")
+
+    fun updateSettingsImage(path: String) {
+        settingsImage = path
+        sp.edit().putString("settings_image", path).apply()
+    }
+
+    /**
      * 页面背景图 —— 给「模块 / 概览 / 设置」三页铺底。
      * 主页和侧边栏都不受影响（它们有自己那套）。
      */

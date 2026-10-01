@@ -37,6 +37,17 @@ object UiState {
         sp?.edit()?.putString("last_dir", path)?.apply()
     }
 
+    /**
+     * 别处（比如 Agent 消息里的文件路径）点了，要让外壳切到文件管理去。
+     * 这里只放个计数器，外壳盯着它变就切页。
+     */
+    var openFilesTick by mutableStateOf(0)
+        private set
+
+    fun requestOpenFiles() {
+        openFilesTick++
+    }
+
     fun saveBook(id: String) {
         if (id.isBlank() || id == lastBookId) return
         lastBookId = id

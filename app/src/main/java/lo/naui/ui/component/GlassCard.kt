@@ -35,6 +35,15 @@ import lo.naui.ui.theme.LocalThemeModeState
 import lo.naui.ui.theme.Prefs
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
+/**
+ * 外壳那层 layerBackdrop。
+ *
+ * 挂在 CompositionLocal 上，这样任何一个 GlassCard 不传 backdrop 也能拿到 ——
+ * 不然每加一个页面都得记着往下传一遍，很容易漏（设置页、Agent 页之前就是这么漏掉的，
+ * 结果只有仿玻璃没有真折射）。
+ */
+val LocalGlassBackdrop = androidx.compose.runtime.compositionLocalOf<Backdrop?> { null }
+
 /** 卡片形状：不传就按主题里的圆角参数来 */
 @Composable
 fun glassShape(): Shape = RoundedCornerShape((Prefs.current?.glassRadius ?: 20).dp)
@@ -74,7 +83,8 @@ fun GlassCard(
         )
     )
 
-    val bd = backdrop
+    // 显式给的优先，没给就找外壳要
+    val bd = backdrop ?: LocalGlassBackdrop.current
     val liquid = Prefs.current?.cardStyle == CardStyle.Liquid
 
     if (liquid && bd != null) {

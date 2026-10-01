@@ -32,6 +32,12 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import android.content.Intent
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withLink
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
@@ -77,7 +83,11 @@ private data class UiMessage(
     val text: String,
     val images: Int = 0,
     val at: Long = System.currentTimeMillis(),
+    /** 工具记录（只有工具名和摘要，命令原文不在里面） */
     val toolLog: List<String> = emptyList(),
+    /** 模型想了几次 */
+    val thinkRounds: Int = 0,
+    val usage: lo.naui.agent.AgentApi.Usage = lo.naui.agent.AgentApi.Usage(),
 )
 
 /**
@@ -198,7 +208,13 @@ fun AgentScreen(
                 },
             )
                 .onSuccess { run ->
-                    val next = messages + UiMessage("assistant", run.reply, toolLog = run.toolLog)
+                    val next = messages + UiMessage(
+                        role = "assistant",
+                        text = run.reply,
+                        toolLog = run.toolLog,
+                        thinkRounds = run.thinkRounds,
+                        usage = run.usage,
+                    )
                     messages = next
                     persist(next)
                 }
@@ -448,15 +464,19 @@ private fun RoundBtn(label: String, onClick: () -> Unit) {
  */
 @Composable
 private fun Bubble(m: UiMessage) {
+    val ctx = LocalContext.current
     val mine = m.role == "user"
+    val shape = RoundedCornerShape(16.dp)
+    var toolsOpen by remember { mutableStateOf(false) }
+    var usageOpen by remember { mutableStateOf(false) }
+
     Row(
         Modifier.fillMaxWidth(),
         horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start,
     ) {
-        val shape = RoundedCornerShape(16.dp)
         Box(
             Modifier
-                // 上限 300dp，但**按内容收缩**，别填满
+                // 上限，但按内容收缩
                 .widthIn(max = 300.dp)
                 .clip(shape)
                 .border(
@@ -468,7 +488,6 @@ private fun Bubble(m: UiMessage) {
         ) {
             GlassCard(
                 backdrop = null,
-                // 这里原来有个 fillMaxWidth()，把气泡撑满了 —— 去掉
                 shape = shape,
                 contentPadding = 12.dp,
             ) {
@@ -481,33 +500,64 @@ private fun Bubble(m: UiMessage) {
                             modifier = Modifier.padding(bottom = 4.dp),
                         )
                     }
-                    Text(m.text.ifBlank { "（空）" }, fontSize = 14.sp)
 
-                    if (m.toolLog.isNotEmpty()) {
+                    // 正文：网址淡蓝 70% 可点开浏览器；文件路径点了进内置文件管理
+                    RichText(
+                        text = m.text.ifBlank { "（空）" },
+                        onOpenUrl = { url ->
+                            runCatching {
+                                ctx.startActivity(
+                                    Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                )
+                            }
+                        },
+                        onOpenPath = { path -> openWithBuiltinFiles(ctx, path) },
+                    )
+
+                    // ---- 想了几次 / 用了几次工具（点了才展开）----
+                    if (!mine && (m.thinkRounds > 0 || m.toolLog.isNotEmpty())) {
                         Spacer(Modifier.height(8.dp))
-                        Column(
+                        Row(
                             Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
+                                .clip(RoundedCornerShape(50))
                                 .background(MiuixTheme.colorScheme.surfaceContainerHigh)
-                                .padding(8.dp),
+                                .clickable { toolsOpen = !toolsOpen }
+                                .padding(horizontal = 10.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(
-                                "用了 " + m.toolLog.size + " 次工具",
+                                "思考了 " + m.thinkRounds + " 次 · 用了 " + m.toolLog.size + " 次工具",
                                 fontSize = 10.5.sp,
                                 color = MiuixTheme.colorScheme.primary,
                             )
-                            Spacer(Modifier.height(4.dp))
-                            m.toolLog.forEach { line ->
-                                Text(
-                                    line,
-                                    fontSize = 10.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                                    maxLines = 6,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                Spacer(Modifier.height(3.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                if (toolsOpen) "▾" else "▸",
+                                fontSize = 10.5.sp,
+                                color = MiuixTheme.colorScheme.primary,
+                            )
+                        }
+
+                        if (toolsOpen) {
+                            Spacer(Modifier.height(6.dp))
+                            Column(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+                                    .padding(8.dp),
+                            ) {
+                                m.toolLog.forEach { line ->
+                                    Text(
+                                        line,
+                                        fontSize = 10.sp,
+                                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                        maxLines = 4,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Spacer(Modifier.height(3.dp))
+                                }
                             }
                         }
                     }
@@ -515,10 +565,12 @@ private fun Bubble(m: UiMessage) {
             }
         }
     }
-    // 时间单独一行挂在下面
+
+    // ---- 下面那行：时间 + （模型的）一个「！」----
     Row(
         Modifier.fillMaxWidth(),
         horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             clock.format(Date(m.at)),
@@ -526,7 +578,181 @@ private fun Bubble(m: UiMessage) {
             color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
         )
+        if (!mine && m.usage.outputTokens > 0) {
+            Box(
+                Modifier
+                    .size(16.dp)
+                    .clip(CircleShape)
+                    .background(
+                        if (usageOpen) MiuixTheme.colorScheme.primary
+                        else MiuixTheme.colorScheme.surfaceContainerHigh
+                    )
+                    .clickable { usageOpen = !usageOpen },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    "!",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (usageOpen) MiuixTheme.colorScheme.onPrimary
+                    else MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                )
+            }
+        }
     }
+
+    // ---- 用量小窗 ----
+    if (usageOpen) {
+        val u = m.usage
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start,
+        ) {
+            Column(
+                Modifier
+                    .widthIn(max = 300.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+            ) {
+                UsageRow("输入 Token（缓存）", u.cachedTokens)
+                UsageRow("输入 Token（其他）", u.inputTokens)
+                UsageRow("输出 Token", u.outputTokens)
+                UsageRow("总输入", u.totalIn)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "耗时 " + fmtDuration(u.millis),
+                    fontSize = 11.sp,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun UsageRow(label: String, value: Int) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+        Text(label, fontSize = 11.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+        Spacer(Modifier.weight(1f))
+        Text(value.toString(), fontSize = 11.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+private fun fmtDuration(ms: Long): String {
+    if (ms <= 0) return "—"
+    val m = ms / 60_000
+    val s = (ms % 60_000) / 1000.0
+    return if (m > 0) {
+        String.format("%dm%.1fs", m, s)
+    } else {
+        String.format("%.1fs", s)
+    }
+}
+
+/** 文件路径点了走内置文件管理，定位到它所在的目录 */
+private fun openWithBuiltinFiles(ctx: Context, path: String) {
+    runCatching {
+        val f = java.io.File(path)
+        val dir = if (f.isDirectory) f.absolutePath else (f.parent ?: f.absolutePath)
+        lo.naui.sys.UiState.init(ctx)
+        lo.naui.sys.UiState.saveDir(dir)
+        // 让外壳切到功能页的文件管理去
+        lo.naui.sys.UiState.requestOpenFiles()
+    }
+}
+
+/**
+ * 富文本。
+ *
+ * 扫描正文里的网址和文件路径：
+ * - 网址 → 淡蓝色 70% 透明度，点了开浏览器
+ * - 文件路径 → 同样的淡蓝，点了进内置文件管理
+ */
+@Composable
+private fun RichText(
+    text: String,
+    onOpenUrl: (String) -> Unit,
+    onOpenPath: (String) -> Unit,
+) {
+    val linkColor = Color(0xFF64B5F6).copy(alpha = 0.70f)
+    val annotated = remember(text) {
+        buildAnnotatedString {
+            var i = 0
+            while (i < text.length) {
+                val urlStart = text.indexOf("http://", i).takeIf { it >= 0 }
+                    ?: text.indexOf("https://", i).takeIf { it >= 0 }
+                val pathStart = findPathStart(text, i)
+
+                val next = listOfNotNull(urlStart, pathStart).minOrNull()
+                if (next == null) {
+                    append(text.substring(i))
+                    break
+                }
+                if (next > i) append(text.substring(i, next))
+
+                if (urlStart != null && next == urlStart) {
+                    val end = scanUrlEnd(text, next)
+                    val url = text.substring(next, end)
+                    withLink(
+                        LinkAnnotation.Url(
+                            url = url,
+                            styles = TextLinkStyles(style = SpanStyle(color = linkColor)),
+                        )
+                    ) { append(url) }
+                    i = end
+                } else {
+                    val end = scanPathEnd(text, next)
+                    val path = text.substring(next, end)
+                    withLink(
+                        LinkAnnotation.Clickable(
+                            tag = path,
+                            styles = TextLinkStyles(style = SpanStyle(color = linkColor)),
+                        ) { onOpenPath(path) }
+                    ) { append(path) }
+                    i = end
+                }
+            }
+        }
+    }
+
+    BasicText(
+        text = annotated,
+        style = TextStyle(
+            fontSize = 14.sp,
+            color = MiuixTheme.colorScheme.onSurface,
+        ),
+    )
+}
+
+/** 找下一个像路径的开头：/ 开头，后面跟字母 */
+private fun findPathStart(text: String, from: Int): Int? {
+    var i = from
+    while (i < text.length) {
+        if (text[i] == '/' && i + 1 < text.length && text[i + 1].isLetter()) {
+            // 前面不能是字母数字（否则是网址里的一段）
+            val prev = text.getOrNull(i - 1)
+            if (prev == null || (!prev.isLetterOrDigit() && prev != '/' && prev != ':')) return i
+        }
+        i++
+    }
+    return null
+}
+
+private fun scanUrlEnd(text: String, start: Int): Int {
+    var i = start
+    while (i < text.length && !text[i].isWhitespace() && text[i] !in "，。、；：（）【】《》"'") i++
+    return i
+}
+
+private fun scanPathEnd(text: String, start: Int): Int {
+    var i = start
+    while (i < text.length) {
+        val c = text[i]
+        if (c.isWhitespace() || c in "，。、；：（）【】《》"'") break
+        i++
+    }
+    return i
 }
 
 /* ---------------- 模型 / 人格 / 环境 面板 ---------------- */

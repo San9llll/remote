@@ -406,6 +406,9 @@ fun AgentScreen(
     confirmHit?.let { hit ->
         // 底层遮罩：暗度可在主题里调（"弹窗底层背景"）
         val scrim = lo.naui.ui.theme.Prefs.current?.dialogScrim ?: 0.55f
+        // 颜色得在这儿先取出来 —— onDrawSurface 是 DrawScope，里头读不了 MiuixTheme
+        val sheetFill = MiuixTheme.colorScheme.surface.copy(alpha = 0.72f)
+        val sheetFillSolid = MiuixTheme.colorScheme.surface.copy(alpha = 0.94f)
         Box(
             Modifier
                 .fillMaxSize()
@@ -425,12 +428,10 @@ fun AgentScreen(
                                 backdrop = bd,
                                 shape = { RoundedCornerShape(20.dp) },
                                 effects = { blur(24f.dp.toPx()) },
-                                onDrawSurface = {
-                                    drawRect(MiuixTheme.colorScheme.surface.copy(alpha = 0.72f))
-                                },
+                                onDrawSurface = { drawRect(sheetFill) },
                             )
                         } else {
-                            Modifier.background(MiuixTheme.colorScheme.surface.copy(alpha = 0.94f))
+                            Modifier.background(sheetFillSolid)
                         }
                     )
                     .padding(20.dp),
@@ -509,6 +510,332 @@ fun AgentScreen(
             }
         }
     }
+}
+
+@Composable
+private fun RoundBtn(label: String, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(38.dp)
+            .clip(CircleShape)
+            .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+            .clickable { onClick() },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, fontSize = 15.sp)
+    }
+}
+
+/**
+ * 气泡。
+ *
+ * 用户的用**白边**液态玻璃，模型的用**黑边**液态玻璃 —— 用户点名要的。
+ * 时间挂在消息下面（用户的消息也带时间）。
+ */
+@Composable
+private fun Bubble(m: UiMessage) {
+    val ctx = LocalContext.current
+    val mine = m.role == "user"
+    val shape = RoundedCornerShape(16.dp)
+    var toolsOpen by remember { mutableStateOf(false) }
+    var usageOpen by remember { mutableStateOf(false) }
+
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start,
+    ) {
+        Box(
+            Modifier
+                // 上限，但按内容收缩
+                .widthIn(max = 300.dp)
+                .clip(shape),
+        ) {
+            GlassCard(
+                backdrop = null,
+                shape = shape,
+                contentPadding = 13.dp,
+            ) {
+                Column {
+                    if (m.images > 0) {
+                        Text(
+                            "［" + m.images + " 张图片］",
+                            fontSize = 11.sp,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            modifier = Modifier.padding(bottom = 4.dp),
+                        )
+                    }
+
+                    // 正文：网址淡蓝 70% 可点开浏览器；文件路径点了进内置文件管理
+                    RichText(
+                        text = m.text.ifBlank { "（空）" },
+                        // 自己发的不染蓝，链接高亮只给模型那边
+                        highlight = !mine,
+                        onOpenUrl = { url ->
+                            runCatching {
+                                ctx.startActivity(
+                                    Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                )
+                            }
+                        },
+                        onOpenPath = { path -> openWithBuiltinFiles(ctx, path) },
+                    )
+
+                    // ---- 想了几次 / 用了几次工具（点了才展开）----
+                    if (!mine && (m.thinkRounds > 0 || m.toolLog.isNotEmpty())) {
+                        Spacer(Modifier.height(8.dp))
+                        Row(
+                            Modifier
+                                .clip(RoundedCornerShape(50))
+                                .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+                                .clickable { toolsOpen = !toolsOpen }
+                                .padding(horizontal = 10.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                "思考了 " + m.thinkRounds + " 次 · 用了 " + m.toolLog.size + " 次工具",
+                                fontSize = 10.5.sp,
+                                color = MiuixTheme.colorScheme.primary,
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                if (toolsOpen) "▾" else "▸",
+                                fontSize = 10.5.sp,
+                                color = MiuixTheme.colorScheme.primary,
+                            )
+                        }
+
+                        if (toolsOpen) {
+                            Spacer(Modifier.height(6.dp))
+                            Column(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+                                    .padding(8.dp),
+                            ) {
+                                m.toolLog.forEach { line ->
+                                    Text(
+                                        line,
+                                        fontSize = 10.sp,
+                                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                        maxLines = 4,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Spacer(Modifier.height(3.dp))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- 下面那行：时间 + （模型的）一个「！」----
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            clock.format(Date(m.at)),
+            fontSize = 10.sp,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+        )
+        if (!mine && m.usage.outputTokens > 0) {
+            Box(
+                Modifier
+                    .size(16.dp)
+                    .clip(CircleShape)
+                    .background(
+                        if (usageOpen) MiuixTheme.colorScheme.primary
+                        else MiuixTheme.colorScheme.surfaceContainerHigh
+                    )
+                    .clickable { usageOpen = !usageOpen },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    "!",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (usageOpen) MiuixTheme.colorScheme.onPrimary
+                    else MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                )
+            }
+        }
+    }
+
+    // ---- 用量小窗 ----
+    if (usageOpen) {
+        val u = m.usage
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start,
+        ) {
+            Column(
+                Modifier
+                    .widthIn(max = 300.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+            ) {
+                UsageRow("输入 Token（缓存）", u.cachedTokens)
+                UsageRow("输入 Token（其他）", u.inputTokens)
+                UsageRow("输出 Token", u.outputTokens)
+                UsageRow("总输入", u.totalIn)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "耗时 " + fmtDuration(u.millis),
+                    fontSize = 11.sp,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun UsageRow(label: String, value: Int) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+        Text(label, fontSize = 11.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+        Spacer(Modifier.weight(1f))
+        Text(value.toString(), fontSize = 11.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+private fun fmtDuration(ms: Long): String {
+    if (ms <= 0) return "—"
+    val m = ms / 60_000
+    val s = (ms % 60_000) / 1000.0
+    return if (m > 0) {
+        String.format("%dm%.1fs", m, s)
+    } else {
+        String.format("%.1fs", s)
+    }
+}
+
+/** 文件路径点了走内置文件管理，定位到它所在的目录 */
+private fun openWithBuiltinFiles(ctx: Context, path: String) {
+    runCatching {
+        val f = java.io.File(path)
+        val dir = if (f.isDirectory) f.absolutePath else (f.parent ?: f.absolutePath)
+        lo.naui.sys.UiState.init(ctx)
+        lo.naui.sys.UiState.saveDir(dir)
+        // 让外壳切到功能页的文件管理去
+        lo.naui.sys.UiState.requestOpenFiles()
+    }
+}
+
+/**
+ * 富文本。
+ *
+ * 扫描正文里的网址和文件路径：
+ * - 网址 → 淡蓝色 70% 透明度，点了开浏览器
+ * - 文件路径 → 同样的淡蓝，点了进内置文件管理
+ */
+@Composable
+private fun RichText(
+    text: String,
+    highlight: Boolean = true,
+    onOpenUrl: (String) -> Unit,
+    onOpenPath: (String) -> Unit,
+) {
+    val linkColor = Color(0xFF64B5F6).copy(alpha = 0.70f)
+
+    // 不高亮就整段当普通文本画，省得白忙
+    if (!highlight) {
+        BasicText(
+            text = text,
+            style = TextStyle(fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurface),
+        )
+        return
+    }
+
+    val annotated = remember(text) {
+        buildAnnotatedString {
+            var i = 0
+            while (i < text.length) {
+                val urlStart = text.indexOf("http://", i).takeIf { it >= 0 }
+                    ?: text.indexOf("https://", i).takeIf { it >= 0 }
+                val pathStart = findPathStart(text, i)
+
+                val next = listOfNotNull(urlStart, pathStart).minOrNull()
+                if (next == null) {
+                    append(text.substring(i))
+                    break
+                }
+                if (next > i) append(text.substring(i, next))
+
+                if (urlStart != null && next == urlStart) {
+                    val end = scanUrlEnd(text, next)
+                    val url = text.substring(next, end)
+                    withLink(
+                        LinkAnnotation.Url(
+                            url = url,
+                            styles = TextLinkStyles(style = SpanStyle(color = linkColor)),
+                        )
+                    ) { append(url) }
+                    i = end
+                } else {
+                    val end = scanPathEnd(text, next)
+                    val path = text.substring(next, end)
+                    withLink(
+                        LinkAnnotation.Clickable(
+                            tag = path,
+                            styles = TextLinkStyles(style = SpanStyle(color = linkColor)),
+                        ) { onOpenPath(path) }
+                    ) { append(path) }
+                    i = end
+                }
+            }
+        }
+    }
+
+    BasicText(
+        text = annotated,
+        style = TextStyle(
+            fontSize = 14.sp,
+            color = MiuixTheme.colorScheme.onSurface,
+        ),
+    )
+}
+
+/** 找下一个像路径的开头：/ 开头，后面跟字母 */
+private fun findPathStart(text: String, from: Int): Int? {
+    var i = from
+    while (i < text.length) {
+        if (text[i] == '/' && i + 1 < text.length && text[i + 1].isLetter()) {
+            // 前面不能是字母数字（否则是网址里的一段）
+            val prev = text.getOrNull(i - 1)
+            if (prev == null || (!prev.isLetterOrDigit() && prev != '/' && prev != ':')) return i
+        }
+        i++
+    }
+    return null
+}
+
+/** 碰到这些就当"这个词说完了" */
+private fun isStopChar(c: Char): Boolean =
+    c.isWhitespace() ||
+        c in "，。、；：（）【】《》" ||
+        c == '"' || c == '\'' || c == '“' || c == '”'
+
+private fun scanUrlEnd(text: String, start: Int): Int {
+    var i = start
+    while (i < text.length && !isStopChar(text[i])) i++
+    return i
+}
+
+private fun scanPathEnd(text: String, start: Int): Int {
+    var i = start
+    while (i < text.length) {
+        val c = text[i]
+        if (isStopChar(c)) break
+        i++
+    }
+    return i
 }
 
 /* ---------------- 模型 / 人格 / 环境 面板 ---------------- */

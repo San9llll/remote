@@ -30,7 +30,7 @@ object AgentTaskStore {
         /** 思考内容，落盘之后退出再进来也能点开看 */
         val reasoning: String = "",
         /** 结构化的工具记录（带耗时），界面用 */
-        val steps: List<AgentChat.ToolStep> = emptyList(),
+        val steps: List<ToolStep> = emptyList(),
     )
 
     data class State(

@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import lo.naui.agent.ChatDb
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -63,15 +64,12 @@ class AgentTaskService : Service() {
         val env = AgentEnv.of(intent.getStringExtra(EXTRA_ENV))
         val maxTokens = intent.getIntExtra(EXTRA_MAX_TOKENS, 1_000_000)
         val temperature = intent.getFloatExtra(EXTRA_TEMP, 0.7f)
-        val historyJson = intent.getStringExtra(EXTRA_HISTORY).orEmpty()
 
-        val history = runCatching {
-            val arr = org.json.JSONArray(historyJson)
-            (0 until arr.length()).mapNotNull { i ->
-                val o = arr.optJSONObject(i) ?: return@mapNotNull null
-                ChatMessage(o.optString("role", "user"), o.optString("text", ""))
-            }
-        }.getOrDefault(emptyList())
+        // ⚠️ 历史**不能**塞在 Intent 里 —— Binder 有 1MB 上限，对话一长就抛
+        // TransactionTooLargeException，然后状态永远卡在"在想"。
+        // 所以只传会话 id，历史让它自己去本地读。
+        ChatDb.init(this)
+        val history = ChatDb.load(convId).map { ChatMessage(it.role, it.text) }
 
         val result = AgentChat.run(
             ctx = this,
@@ -93,6 +91,7 @@ class AgentTaskService : Service() {
             },
         )
 
+        try {
         result
             .onSuccess { run ->
                 AgentTaskStore.finish(
@@ -121,10 +120,25 @@ class AgentTaskService : Service() {
                 )
                 notify(buildNotification("出错了：" + (e.message ?: "").take(40)))
             }
-
-        // 弄完了歇一会儿就撤，别一直占着通知
-        kotlinx.coroutines.delay(4000)
-        stopSelf()
+        } finally {
+            // 不管中间怎么炸的，状态一定要收尾 —— 不然界面就永远停在"在想"
+            if (AgentTaskStore.state.running) {
+                AgentTaskStore.finish(
+                    AgentTaskStore.Result(
+                        conversationId = convId,
+                        reply = "",
+                        toolLog = emptyList(),
+                        thinkRounds = 0,
+                        usage = AgentApi.Usage(),
+                        ok = false,
+                        error = "任务中断了",
+                    )
+                )
+            }
+            // 歇一会儿再撤，别一直占着通知
+            kotlinx.coroutines.delay(4000)
+            stopSelf()
+        }
     }
 
     /* ---------------- 通知 ---------------- */
@@ -193,7 +207,6 @@ class AgentTaskService : Service() {
         private const val EXTRA_ENV = "env"
         private const val EXTRA_MAX_TOKENS = "max_tokens"
         private const val EXTRA_TEMP = "temp"
-        private const val EXTRA_HISTORY = "history"
 
         /**
          * 把任务交给服务去跑。
@@ -207,15 +220,10 @@ class AgentTaskService : Service() {
             env: AgentEnv,
             maxTokens: Int,
             temperature: Float,
-            history: List<ChatMessage>,
         ) {
-            val arr = org.json.JSONArray()
-            history.forEach { m ->
-                arr.put(org.json.JSONObject().put("role", m.role).put("text", m.text))
-            }
-
             AgentTaskStore.begin(conversationId)
 
+            // Intent 里只放小东西（id 和几个配置），历史由服务自己去读
             val intent = Intent(ctx, AgentTaskService::class.java).apply {
                 action = ACTION_RUN
                 putExtra(EXTRA_CONV, conversationId)
@@ -223,15 +231,29 @@ class AgentTaskService : Service() {
                 putExtra(EXTRA_ENV, env.id)
                 putExtra(EXTRA_MAX_TOKENS, maxTokens)
                 putExtra(EXTRA_TEMP, temperature)
-                putExtra(EXTRA_HISTORY, arr.toString())
             }
 
-            runCatching {
+            val r = runCatching {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     ctx.startForegroundService(intent)
                 } else {
                     ctx.startService(intent)
                 }
+            }
+
+            // 起不来就把状态回滚 —— 不然界面会一直转"在想"
+            r.onFailure { e ->
+                AgentTaskStore.finish(
+                    AgentTaskStore.Result(
+                        conversationId = conversationId,
+                        reply = "",
+                        toolLog = emptyList(),
+                        thinkRounds = 0,
+                        usage = AgentApi.Usage(),
+                        ok = false,
+                        error = "后台服务起不来：" + (e.message ?: e.javaClass.simpleName),
+                    )
+                )
             }
         }
     }

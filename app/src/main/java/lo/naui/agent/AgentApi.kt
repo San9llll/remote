@@ -37,7 +37,7 @@ data class ChatAttachment(
  */
 object AgentApi {
 
-    private const val TIMEOUT_MS = 120_000
+    private const val TIMEOUT_MS = 60_000
 
     fun endpoint(base: String, path: String): String {
         var b = base.trim().trimEnd('/')

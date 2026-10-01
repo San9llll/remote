@@ -188,6 +188,16 @@ fun AgentScreen(
         }
     }
 
+    // 看门狗：跑太久给个提示（不是自动杀，只是告诉你"可以停"）
+    var tooLong by remember { mutableStateOf(false) }
+    LaunchedEffect(sending) {
+        tooLong = false
+        if (sending) {
+            kotlinx.coroutines.delay(4 * 60 * 1000L)
+            if (lo.naui.agent.AgentTaskStore.state.running) tooLong = true
+        }
+    }
+
     // 任务跑完了主动来取一次（不用退出去再进）
     val taskState = AgentTaskStore.state
     LaunchedEffect(taskState.running, taskState.finishedAt) {
@@ -229,13 +239,19 @@ fun AgentScreen(
         val user = UiMessage("user", composed, images.size)
         val history = messages + user
         messages = history
-        persist(history)
         draft = ""
         pending = emptyList()
         error = null
 
-        // 丢给前台服务去跑 —— 这样切页、退到后台都不会断
         val convId = AgentStore.activeConvId ?: ChatDb.newId()
+        val plain = history.map { ChatMessage(it.role, it.text, imageCount = it.images) }
+        convTitle = ChatDb.titleOf(plain)
+
+        // 先把对话**同步**落盘，再叫服务 —— 服务是从本地读历史的，
+        // 存晚一步它就读到旧的了
+        ChatDb.save(convId, convTitle, plain)
+
+        // 丢给前台服务去跑：切页、退到后台都不会断
         AgentTaskService.start(
             ctx = ctx,
             conversationId = convId,
@@ -243,7 +259,6 @@ fun AgentScreen(
             env = AgentStore.env,
             maxTokens = AgentStore.maxTokens,
             temperature = AgentStore.temperature,
-            history = history.map { ChatMessage(it.role, it.text) },
         )
     }
 
@@ -305,12 +320,33 @@ fun AgentScreen(
                     items(messages) { m -> Bubble(m) }
                     if (sending) {
                         item(key = "__pending__") {
-                            Text(
-                                progress.ifBlank { "对方正在输入…" },
-                                fontSize = 12.sp,
-                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                                modifier = Modifier.padding(start = 6.dp, top = 4.dp),
-                            )
+                            Row(
+                                Modifier.padding(start = 6.dp, top = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    progress.ifBlank { "对方正在输入…" },
+                                    fontSize = 12.sp,
+                                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                )
+                                Spacer(Modifier.width(10.dp))
+                                // 卡住了能自己叫停，不用干等
+                                Box(
+                                    Modifier
+                                        .clip(RoundedCornerShape(50))
+                                        .background(MiuixTheme.colorScheme.error.copy(alpha = 0.14f))
+                                        .clickable {
+                                            lo.naui.agent.AgentTaskStore.cancel()
+                                        }
+                                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                                ) {
+                                    Text(
+                                        "停",
+                                        fontSize = 11.sp,
+                                        color = MiuixTheme.colorScheme.error,
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -340,6 +376,15 @@ fun AgentScreen(
                 }
             }
             Spacer(Modifier.height(8.dp))
+        }
+
+        if (tooLong) {
+            Text(
+                "跑了 4 分钟还没完，可能是网络卡住了 —— 点上面的「停」可以中止",
+                fontSize = 11.5.sp,
+                color = MiuixTheme.colorScheme.error,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
         }
 
         error?.let {

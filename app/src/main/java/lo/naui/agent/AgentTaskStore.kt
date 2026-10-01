@@ -78,6 +78,35 @@ object AgentTaskStore {
         return r
     }
 
+    /**
+     * 手动叫停。
+     *
+     * 卡住的时候总得有条路 —— 用户点了「停」就把状态收掉，
+     * 服务那边下一次 onProgress 会因为 `!state.running` 直接跳过。
+     */
+    fun cancel() {
+        if (!state.running) return
+        val convId = state.conversationId
+        state = state.copy(running = false, progress = "", finishedAt = System.currentTimeMillis())
+        pendingResult = Result(
+            conversationId = convId,
+            reply = "",
+            toolLog = emptyList(),
+            thinkRounds = 0,
+            usage = AgentApi.Usage(),
+            ok = false,
+            error = "你自己叫停了这次任务",
+        )
+    }
+
+    /** 这个任务跑了多久了（毫秒） */
+    val runningForMs: Long
+        get() = if (state.running && state.startedAt > 0) {
+            System.currentTimeMillis() - state.startedAt
+        } else {
+            0L
+        }
+
     val elapsedMs: Long
         get() = if (state.running && state.startedAt > 0) {
             System.currentTimeMillis() - state.startedAt

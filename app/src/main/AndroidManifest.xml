@@ -78,6 +78,23 @@
             </intent-filter>
         </activity>
 
+        <!-- Agent 任务宿主：前台服务托着，切页/切后台都不容易被杀 -->
+        <service
+            android:name=".agent.AgentTaskService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- 开机自启：把 Agent 服务拉起来 -->
+        <receiver
+            android:name=".agent.BootReceiver"
+            android:exported="true"
+            android:enabled="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+
         <!-- Shizuku 的 binder provider（官方要求这样声明） -->
         <provider
             android:name="rikka.shizuku.ShizukuProvider"

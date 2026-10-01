@@ -113,8 +113,11 @@ fun HomeSceneRail(
     destinations: List<Dest>,
     current: Dest,
     onSelect: (Dest) -> Unit,
-    /** 点的那一项在屏幕上的纵向位置（0~1），方案 B 要从这儿扩散 */
-    onSelectAt: (Dest, Float) -> Unit = { d, _ -> onSelect(d) },
+    /**
+     * 点的那一项在**屏幕上的真实坐标**（归一化 0~1），方案 B 拿它当扩散圆心。
+     * 两个数分别是 x、y。
+     */
+    onSelectAt: (Dest, Float, Float) -> Unit = { d, _, _ -> onSelect(d) },
     clockStyle: ClockStyle,
     wallpaper: ImageBitmap? = null,
     showBattery: Boolean = true,
@@ -189,6 +192,7 @@ fun HomeSceneRail(
             val iconsOnly = compact && maxHeight < SceneRailLabelledHeight
 
             val totalHeight = maxHeight.value.coerceAtLeast(1f)
+            val totalWidth = maxWidth.value.coerceAtLeast(1f)
 
             Column(
                 modifier = Modifier
@@ -245,16 +249,21 @@ fun HomeSceneRail(
 
                 // 全部导航项都在（含「主页」）—— 概览那个入口可以在侧栏设置里关掉
                 destinations.forEach { d ->
-                    var centerY by remember { mutableStateOf(0f) }
+                    var cx by remember { mutableStateOf(0f) }
+                    var cy by remember { mutableStateOf(0f) }
                     SceneRailItem(
                         selected = current == d,
                         icon = d.icon,
                         label = d.label,
                         showLabel = !iconsOnly,
                         compact = compact,
-                        onPositioned = { cy -> centerY = cy },
+                        onPositioned = { x, y -> cx = x; cy = y },
                         onClick = {
-                            onSelectAt(d, (centerY / totalHeight).coerceIn(0f, 1f))
+                            onSelectAt(
+                                d,
+                                (cx / totalWidth).coerceIn(0f, 1f),
+                                (cy / totalHeight).coerceIn(0f, 1f),
+                            )
                         },
                     )
                 }
@@ -421,7 +430,7 @@ private fun SceneRailItem(
     label: String,
     showLabel: Boolean,
     compact: Boolean,
-    onPositioned: (Float) -> Unit = {},
+    onPositioned: (Float, Float) -> Unit = { _, _ -> },
     onClick: () -> Unit,
 ) {
     val alpha by animateFloatAsState(
@@ -433,9 +442,12 @@ private fun SceneRailItem(
         modifier = Modifier
             .fillMaxWidth()
             .onGloballyPositioned { coords ->
-                // 把自己在屏幕上的中心 y 报出去
-                val top = coords.positionInWindow().y
-                onPositioned(top + coords.size.height / 2f)
+                // 把自己中心点在窗口里的绝对坐标报出去
+                val p = coords.positionInWindow()
+                onPositioned(
+                    p.x + coords.size.width / 2f,
+                    p.y + coords.size.height / 2f,
+                )
             }
             .padding(
                 horizontal = if (compact) 8.dp else 10.dp,

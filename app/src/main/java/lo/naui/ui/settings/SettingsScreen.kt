@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import lo.naui.ui.common.SectionTitle
 import lo.naui.ui.component.GlassCard
+import lo.naui.ui.component.IndicatorSwitchPreference
 import lo.naui.ui.theme.ThemePrefs
 import lo.naui.ui.theme.label
 import top.yukonga.miuix.kmp.basic.Text
@@ -40,6 +41,8 @@ fun SettingsScreen(
     onOpenTheme: () -> Unit,
     onOpenAbout: () -> Unit,
 ) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    lo.naui.agent.AgentTaskStore.init(ctx)
     Column(Modifier.fillMaxSize()) {
         // 顶栏（跟原来 TopAppBar 的位置和字号对齐）
         Column(
@@ -63,6 +66,29 @@ fun SettingsScreen(
                         summary = prefs.paletteStyle.label() + " · " + prefs.darkMode.label +
                             " · " + prefs.globalLayout.label,
                         onClick = onOpenTheme,
+                    )
+                }
+            }
+
+            item(key = "keepalive") {
+                SectionTitle("后台")
+                SettingsCard {
+                    IndicatorSwitchPreference(
+                        checked = lo.naui.agent.AgentTaskStore.keepAlive,
+                        onCheckedChange = { lo.naui.agent.AgentTaskStore.updateKeepAlive(it) },
+                        title = "后台留存",
+                        summary = "任务丢给前台服务跑，切页 / 切后台都不容易断",
+                    )
+                    IndicatorSwitchPreference(
+                        checked = lo.naui.agent.AgentTaskStore.bootStart,
+                        onCheckedChange = { lo.naui.agent.AgentTaskStore.updateBootStart(it) },
+                        title = "开机自启",
+                        summary = "开机后把 Agent 服务拉起来待命",
+                    )
+                    ArrowPreference(
+                        title = "把它加进电池白名单",
+                        summary = "系统省电策略有时还是会杀，加进白名单更稳",
+                        onClick = { requestIgnoreBattery(ctx) },
                     )
                 }
             }
@@ -96,5 +122,30 @@ private fun SettingsCard(content: @Composable () -> Unit) {
             .padding(bottom = 8.dp),
     ) {
         Column(Modifier.fillMaxWidth()) { content() }
+    }
+}
+
+/** 跳系统那个「不优化电池」的页面 */
+private fun requestIgnoreBattery(ctx: android.content.Context) {
+    runCatching {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            val i = android.content.Intent(
+                android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                android.net.Uri.parse("package:" + ctx.packageName),
+            ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            ctx.startActivity(i)
+        } else {
+            val i = android.content.Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            ctx.startActivity(i)
+        }
+    }.onFailure {
+        runCatching {
+            ctx.startActivity(
+                android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    android.net.Uri.parse("package:" + ctx.packageName))
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        }
     }
 }

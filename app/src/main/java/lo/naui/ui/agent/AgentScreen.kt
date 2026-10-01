@@ -67,6 +67,8 @@ import kotlinx.coroutines.launch
 import lo.naui.agent.AgentChat
 import lo.naui.agent.AgentEnv
 import lo.naui.agent.AgentStore
+import lo.naui.agent.AgentTaskService
+import lo.naui.agent.AgentTaskStore
 import lo.naui.agent.ChatAttachment
 import lo.naui.agent.ChatDb
 import lo.naui.agent.ChatMessage
@@ -113,8 +115,11 @@ fun AgentScreen(
     var convTitle by remember { mutableStateOf("新对话") }
     var pending by remember { mutableStateOf<List<ChatAttachment>>(emptyList()) }
     var draft by remember { mutableStateOf("") }
-    var sending by remember { mutableStateOf(false) }
+    // 这两个改成跟着后台任务走
+    val task = lo.naui.agent.AgentTaskStore.state
+    val sending = task.running
     var progress by remember { mutableStateOf("") }
+    LaunchedEffect(task.progress) { progress = task.progress }
     var error by remember { mutableStateOf<String?>(null) }
     var sheetOpen by remember { mutableStateOf(false) }
     // 危险动作的确认：AI 那边挂起，等用户点
@@ -153,6 +158,47 @@ fun AgentScreen(
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
     }
 
+    // ---- 后台任务：切页 / 退出去再回来都能接着看 ----
+    LaunchedEffect(Unit) {
+        AgentTaskStore.init(ctx)
+        // 回来的时候如果已经有结果在等着，取走
+        AgentTaskStore.takeResult()?.let { r ->
+            if (r.conversationId == AgentStore.activeConvId) {
+                val text = if (r.ok) r.reply else "出错了：" + r.error
+                val next = messages + UiMessage(
+                    role = "assistant",
+                    text = text,
+                    toolLog = r.toolLog,
+                    thinkRounds = r.thinkRounds,
+                    usage = r.usage,
+                )
+                messages = next
+                persist(next)
+            }
+        }
+    }
+
+    // 任务跑完了主动来取一次（不用退出去再进）
+    val taskState = AgentTaskStore.state
+    LaunchedEffect(taskState.running, taskState.finishedAt) {
+        if (!taskState.running) {
+            AgentTaskStore.takeResult()?.let { r ->
+                if (r.conversationId == AgentStore.activeConvId) {
+                    val text = if (r.ok) r.reply else "出错了：" + r.error
+                    val next = messages + UiMessage(
+                        role = "assistant",
+                        text = text,
+                        toolLog = r.toolLog,
+                        thinkRounds = r.thinkRounds,
+                        usage = r.usage,
+                    )
+                    messages = next
+                    persist(next)
+                }
+            }
+        }
+    }
+
     fun persist(list: List<UiMessage>) {
         val id = AgentStore.activeConvId ?: return
         val plain = list.map { ChatMessage(it.role, it.text, imageCount = it.images) }
@@ -184,45 +230,18 @@ fun AgentScreen(
         draft = ""
         pending = emptyList()
         error = null
-        sending = true
-        progress = "在想…"
 
-        scope.launch {
-            val chatHistory = history.map { ChatMessage(it.role, it.text) }
-            AgentChat.run(
-                ctx = ctx,
-                system = AgentStore.systemPromptNow,
-                history = chatHistory,
-                env = AgentStore.env,
-                maxTokens = AgentStore.maxTokens,
-                temperature = AgentStore.temperature,
-                onProgress = { progress = it },
-                askUser = { reason ->
-                    // 挂在这儿等用户点 —— 工具循环在 IO 线程上等着
-                    val gate = kotlinx.coroutines.CompletableDeferred<Boolean>()
-                    confirmReason = reason
-                    confirmAnswer = gate
-                    val ok = gate.await()
-                    confirmReason = null
-                    confirmAnswer = null
-                    ok
-                },
-            )
-                .onSuccess { run ->
-                    val next = messages + UiMessage(
-                        role = "assistant",
-                        text = run.reply,
-                        toolLog = run.toolLog,
-                        thinkRounds = run.thinkRounds,
-                        usage = run.usage,
-                    )
-                    messages = next
-                    persist(next)
-                }
-                .onFailure { error = it.message ?: "调用失败" }
-            sending = false
-            progress = ""
-        }
+        // 丢给前台服务去跑 —— 这样切页、退到后台都不会断
+        val convId = AgentStore.activeConvId ?: ChatDb.newId()
+        AgentTaskService.start(
+            ctx = ctx,
+            conversationId = convId,
+            system = AgentStore.systemPromptNow,
+            env = AgentStore.env,
+            maxTokens = AgentStore.maxTokens,
+            temperature = AgentStore.temperature,
+            history = history.map { ChatMessage(it.role, it.text) },
+        )
     }
 
     Column(

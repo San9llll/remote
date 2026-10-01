@@ -743,7 +743,7 @@ private fun findPathStart(text: String, from: Int): Int? {
 /** 碰到这些就当"这个词说完了" */
 private fun isStopChar(c: Char): Boolean =
     c.isWhitespace() ||
-        if (isStopChar(c)) break
+        c in "，。、；：（）【】《》" ||
         c == '"' || c == '\'' || c == '“' || c == '”'
 
 private fun scanUrlEnd(text: String, start: Int): Int {

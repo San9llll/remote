@@ -24,8 +24,8 @@ android {
         // 那 termux 的二进制（全在 $PREFIX/bin 下）就一个都跑不起来。
         // termux 官方也是这么绕的，代价是上不了 Play。
         targetSdk = 28
-        versionCode = 52
-        versionName = "0.52.0"
+        versionCode = 53
+        versionName = "0.53.0"
 
         // 只打 arm64-v8a。
         // 一来机器就是 arm64，多带别的 ABI 纯属白占体积；
@@ -106,4 +106,8 @@ dependencies {
     implementation(libs.capsule)
 
     implementation(libs.kotlinx.coroutines.android)
+
+    // LSPosed 模块用的 Xposed API。
+    // compileOnly：只编译期要，**不打进 APK** —— 运行时那些类由框架提供。
+    compileOnly("de.robv.android.xposed:api:82")
 }

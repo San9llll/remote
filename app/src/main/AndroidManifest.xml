@@ -120,5 +120,20 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+        <!-- ============ LSPosed 模块声明 ============ -->
+        <!-- 这三条 meta-data 是 Xposed 框架认模块的凭据，缺一不可 -->
+        <meta-data
+            android:name="xposedmodule"
+            android:value="true" />
+        <meta-data
+            android:name="xposeddescription"
+            android:value="把 Nakour 挂进系统侧边栏（ColorOS 智能侧边栏 / 小米侧边栏）替换掉悬浮窗那套。" />
+        <meta-data
+            android:name="xposedminversion"
+            android:value="82" />
+        <meta-data
+            android:name="xposedscope"
+            android:resource="@array/xposed_scope" />
+
     </application>
 </manifest>

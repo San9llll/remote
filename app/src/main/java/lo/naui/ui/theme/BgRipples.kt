@@ -47,6 +47,9 @@ object BgRipples {
      * 传进来的是 px 还是 dp，也不怕窗口尺寸变。
      */
     fun add(x: Float, y: Float) {
+        // 省电模式下不播 —— 涟漪要 60fps 驱动，是这里少数的"跑满一秒钟"的东西
+        if (Prefs.current?.powerSave == true) return
+
         val now = System.currentTimeMillis()
         // 先清掉已经跑完的，免得列表越堆越长
         val alive = list.filter { now - it.at < LINGER_MS }

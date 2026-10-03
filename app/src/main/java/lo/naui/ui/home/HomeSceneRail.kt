@@ -161,7 +161,13 @@ fun HomeSceneRail(
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
                         .fillMaxSize()
-                        .blur(40.dp, edgeTreatment = BlurredEdgeTreatment.Rectangle),
+                        .then(
+                            // 省电模式下不糊 —— 导轨的模糊是**常驻**开销，
+                            // 它一直在屏幕上。另外半径从 40 降到 22：
+                            // 视觉上几乎看不出差别，开销差挺多
+                            if (lo.naui.ui.theme.Prefs.current?.powerSave == true) Modifier
+                            else Modifier.blur(22.dp, edgeTreatment = BlurredEdgeTreatment.Rectangle)
+                        ),
                 )
             } else {
                 Box(

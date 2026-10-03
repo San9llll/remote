@@ -174,6 +174,19 @@ fun SettingsScreen(
                 }
             }
 
+            item(key = "perf") {
+                SectionTitle("性能")
+                SettingsCard(index = 4) {
+                    IndicatorSwitchPreference(
+                        checked = prefs.powerSave,
+                        onCheckedChange = { prefs.updatePowerSave(it) },
+                        title = "省电模式",
+                        summary = "关掉所有模糊和真折射、切背景不播涟漪、卡片不做入场动画。" +
+                            "手机发烫、或者 CPU 被系统压得很低的时候开它试试",
+                    )
+                }
+            }
+
             item(key = "about") {
                 SectionTitle("关于")
                 SettingsCard(index = 2) {

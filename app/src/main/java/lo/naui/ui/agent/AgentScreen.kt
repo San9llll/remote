@@ -378,7 +378,7 @@ fun AgentScreen(
                     contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    items(messages) { m ->
+                    items(messages, key = { it.at.toString() + it.role }) { m ->
                         Bubble(
                             m = m,
                             onDelete = if (m.role == "user") {

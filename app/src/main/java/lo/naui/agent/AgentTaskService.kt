@@ -123,6 +123,13 @@ class AgentTaskService : Service() {
                     )
                 )
                 notify(buildNotification("想完了"))
+                // 开了流体云就顺带抬一下（小米会自己判断要不要显示）
+                lo.naui.sys.FluidCloud.notifyFocus(
+                    this,
+                    0x4F43,
+                    "任务完成",
+                    run.reply.replace('\n', ' ').take(40),
+                )
             }
             .onFailure { e ->
                 AgentTaskStore.finish(

@@ -1,5 +1,7 @@
 package lo.naui.ui.settings
 
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
@@ -12,6 +14,7 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -43,6 +46,11 @@ fun SettingsScreen(
 ) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
     lo.naui.agent.AgentTaskStore.init(ctx)
+    lo.naui.sys.FloatingBall.init(ctx)
+    lo.naui.sys.FluidCloud.init(ctx)
+
+    // 权限被拒的时候给一句提示（开关状态本身是可观察的，不用手动刷新）
+    var floatDenied by remember { androidx.compose.runtime.mutableStateOf(false) }
     Column(Modifier.fillMaxSize()) {
         // 顶栏（跟原来 TopAppBar 的位置和字号对齐）
         Column(
@@ -89,6 +97,44 @@ fun SettingsScreen(
                         title = "把它加进电池白名单",
                         summary = "系统省电策略有时还是会杀，加进白名单更稳",
                         onClick = { requestIgnoreBattery(ctx) },
+                    )
+                }
+            }
+
+            item(key = "connect") {
+                SectionTitle("连接")
+                SettingsCard(index = 3) {
+                    IndicatorSwitchPreference(
+                        checked = lo.naui.sys.FloatingBall.enabled,
+                        onCheckedChange = { v ->
+                            if (v && !lo.naui.sys.FloatingBall.canShow(ctx)) {
+                                // 没权限就先把开关弹回去，然后引它去开
+                                lo.naui.sys.FloatingBall.setEnabled(ctx, false)
+                                floatDenied = true
+                                lo.naui.sys.FloatingBall.requestPermission(ctx)
+                            } else {
+                                lo.naui.sys.FloatingBall.setEnabled(ctx, v)
+                            }
+                        },
+                        title = "系统悬浮窗",
+                        summary = "飘一颗小球在别的应用上面，看 Agent 跑到哪了；点一下回 App",
+                    )
+                    IndicatorSwitchPreference(
+                        checked = lo.naui.sys.FluidCloud.enabled,
+                        onCheckedChange = { lo.naui.sys.FluidCloud.setEnabled(ctx, it) },
+                        title = "流体云",
+                        summary = if (lo.naui.sys.FluidCloud.isMiui())
+                            "任务进度抬到状态栏那块小区域（小米 / 澎湃专用）"
+                        else
+                            "当前不是小米系系统，开了也只有普通通知",
+                    )
+                }
+                if (floatDenied) {
+                    Text(
+                        "悬浮窗权限得手动给：系统设置 → 应用 → 显示在其他应用上层。开完回来再打开开关",
+                        fontSize = 11.sp,
+                        color = MiuixTheme.colorScheme.error,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
                     )
                 }
             }

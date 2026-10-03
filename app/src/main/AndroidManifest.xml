@@ -84,6 +84,12 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <!-- 悬浮球：飘在别的应用上面看任务进度 -->
+        <service
+            android:name=".sys.FloatingBallService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse" />
+
         <!-- 开机自启：把 Agent 服务拉起来 -->
         <receiver
             android:name=".agent.BootReceiver"

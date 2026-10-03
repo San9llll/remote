@@ -95,6 +95,8 @@ fun AgentSessionsScreen(onBack: () -> Unit = {}) {
                 val active = AgentStore.activeConvId == c.id
                 Card(
                     Modifier
+                        // animateItem：进来/出去/换位置时自带淡入和位移
+                        .animateItem()
                         .fillMaxWidth()
                         .padding(horizontal = 12.dp)
                         .padding(bottom = 6.dp)

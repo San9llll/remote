@@ -45,26 +45,37 @@ object AgentRunner {
 
     fun sandboxRoot(ctx: Context): File = File(ctx.filesDir, "sandbox").apply { mkdirs() }
 
-    /** 跑一条命令 */
-    suspend fun shell(ctx: Context, env: AgentEnv, command: String): ToolResult =
-        withContext(Dispatchers.IO) {
-            runCatching {
-                if (env == AgentEnv.Sandbox) {
-                    val root = sandboxRoot(ctx)
-                    val cmd = guard(command, root)
-                    val out = runLocalShell(ctx, cmd, root)
-                    ToolResult(true, clip(out))
-                } else {
-                    val out = Privilege.exec(ctx, command)
-                        ?: runLocalShell(ctx, command, sandboxRoot(ctx))
-                    val level = Privilege.level(ctx)
-                    ToolResult(
-                        true,
-                        clip(if (level == PrivLevel.Normal) "（没有 root，用的普通权限跑）\n" + out else out)
-                    )
-                }
-            }.getOrElse { ToolResult(false, "执行失败：" + (it.message ?: it.javaClass.simpleName)) }
-        }
+    /**
+     * 跑一条命令。
+     *
+     * [onLine] 会拿到**实时输出** —— 下载进度就是靠它读出来的
+     * （curl 的百分比 / wget 的速度），不然只能等命令跑完才知道下了多少。
+     */
+    suspend fun shell(
+        ctx: Context,
+        env: AgentEnv,
+        command: String,
+        onLine: ((String) -> Unit)? = null,
+    ): ToolResult = withContext(Dispatchers.IO) {
+        runCatching {
+            if (env == AgentEnv.Sandbox) {
+                val root = sandboxRoot(ctx)
+                val cmd = guard(command, root)
+                val out = runLocalShell(ctx, cmd, root, onLine)
+                ToolResult(true, clip(out))
+            } else {
+                // 优先走 root / Shizuku（这条没有实时输出）；
+                // 拿不到特权才退回本地 shell —— 那条能逐行读，进度看得见
+                val out = Privilege.exec(ctx, command)
+                    ?: runLocalShell(ctx, command, sandboxRoot(ctx), onLine)
+                val level = Privilege.level(ctx)
+                ToolResult(
+                    true,
+                    clip(if (level == PrivLevel.Normal) "（没有 root，用的普通权限跑）\n" + out else out)
+                )
+            }
+        }.getOrElse { ToolResult(false, "执行失败：" + (it.message ?: it.javaClass.simpleName)) }
+    }
 
     /** 读文件 */
     suspend fun readFile(ctx: Context, env: AgentEnv, path: String, maxBytes: Int = 200_000): ToolResult =
@@ -156,7 +167,12 @@ object AgentRunner {
         return cd + command
     }
 
-    private fun runLocalShell(ctx: Context, cmd: String, dir: File): String = runCatching {
+    private fun runLocalShell(
+        ctx: Context,
+        cmd: String,
+        dir: File,
+        onLine: ((String) -> Unit)? = null,
+    ): String = runCatching {
         // 装了 Termux 环境就用它那份 bash，功能全；没装就系统 sh
         val useTermux = Bootstrap.isInstalled(ctx)
         val shellPath = if (useTermux) Bootstrap.shellPath(ctx) else "/system/bin/sh"
@@ -174,10 +190,18 @@ object AgentRunner {
         }
 
         val p = pb.start()
-        val out = p.inputStream.bufferedReader().readText()
+
+        // 逐行读，边读边吐给回调 —— 这样下载进度能实时更新
+        val sb = StringBuilder()
+        p.inputStream.bufferedReader().useLines { lines ->
+            lines.forEach { line ->
+                sb.append(line).append('\n')
+                onLine?.invoke(line)
+            }
+        }
         p.waitFor(TIMEOUT_SEC, TimeUnit.SECONDS)
         p.destroy()
-        out
+        sb.toString()
     }.getOrDefault("")
 
     private fun clip(s: String): String =

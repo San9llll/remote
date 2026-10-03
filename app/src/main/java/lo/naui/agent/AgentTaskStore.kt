@@ -72,9 +72,27 @@ object AgentTaskStore {
     var runningToolHint by mutableStateOf("")
         private set
 
+    /** 进度（0~1）。-1 = 算不出来，界面就画个来回跑的高光 */
+    var toolProgress by mutableStateOf(-1f)
+        private set
+
+    /** 速度那行字，比如 "3.2 MB/s" */
+    var toolSpeed by mutableStateOf("")
+        private set
+
     fun setRunningTool(label: String, hint: String) {
         runningTool = label
         runningToolHint = hint
+        toolProgress = -1f
+        toolSpeed = ""
+    }
+
+    fun setToolProgress(p: Float) {
+        toolProgress = p.coerceIn(0f, 1f)
+    }
+
+    fun setToolSpeed(s: String) {
+        toolSpeed = s
     }
 
     /** 流式的中间记录：工具步骤（界面实时显示） */
@@ -88,6 +106,8 @@ object AgentTaskStore {
         streamingSteps = emptyList()
         runningTool = ""
         runningToolHint = ""
+        toolProgress = -1f
+        toolSpeed = ""
     }
 
     fun appendReasoning(s: String) {

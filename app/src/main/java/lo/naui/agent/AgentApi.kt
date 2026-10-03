@@ -242,16 +242,21 @@ object AgentApi {
                 val delta = chunk.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("delta")
                     ?: continue
 
-                // 思考内容：三家字段名不一样，都看一眼
-                val r = delta.optString("reasoning_content").ifBlank { delta.optString("reasoning") }
-                    .ifBlank { delta.optString("thinking") }
-                if (r.isNotBlank()) {
+                // 思考内容：三家字段名不一样，都看一眼。
+                //
+                // ⚠️ 不能用 `optString(key).ifBlank { ... }` —— JSON 里那个字段是
+                // `null` 的时候，optString 返回的是**字符串 "null"**，isNotBlank 为真，
+                // 于是界面上会一直往外吐 "null"。所以得自己判 isNull。
+                val r = delta.strOrNull("reasoning_content")
+                    ?: delta.strOrNull("reasoning")
+                    ?: delta.strOrNull("thinking")
+                if (!r.isNullOrBlank()) {
                     reason.append(r)
                     onReasoning(r)
                 }
 
-                val c = delta.optString("content")
-                if (c.isNotBlank()) {
+                val c = delta.strOrNull("content")
+                if (!c.isNullOrBlank()) {
                     text.append(c)
                     onDelta(c)
                 }
@@ -448,6 +453,20 @@ object AgentApi {
             if (out.isEmpty()) throw IllegalStateException("这个接口没返回模型列表")
             out.distinct().sorted()
         }
+    }
+
+    /**
+     * 安全地取一个字符串字段。
+     *
+     * `null` / 缺失 / 空串 / 字面量 "null" 一律当没有 ——
+     * 后面这个最坑，不少中转站会真的把字符串 "null" 塞进 content 或 reasoning 里。
+     */
+    private fun JSONObject.strOrNull(key: String): String? {
+        if (!has(key) || isNull(key)) return null
+        val v = optString(key, "")
+        if (v.isBlank()) return null
+        if (v == "null" || v == "NULL") return null
+        return v
     }
 
     /** 把工具跑出来的东西包成一条 tool 消息 */

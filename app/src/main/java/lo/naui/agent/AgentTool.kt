@@ -111,6 +111,8 @@ object AgentTools {
         name: String,
         args: JSONObject,
         askUser: (suspend (DangerGuard.Hit) -> Boolean)? = null,
+        /** 命令的实时输出行（下载进度靠它） */
+        onLine: ((String) -> Unit)? = null,
     ): ToolResult {
         // 先过危险闸门
         DangerGuard.risk(name, args)?.let { hit ->
@@ -133,7 +135,7 @@ object AgentTools {
                 }
             }
         }
-        return runUnchecked(ctx, env, name, args)
+        return runUnchecked(ctx, env, name, args, onLine)
     }
 
     private suspend fun runUnchecked(
@@ -141,8 +143,9 @@ object AgentTools {
         env: AgentEnv,
         name: String,
         args: JSONObject,
+        onLine: ((String) -> Unit)? = null,
     ): ToolResult = when (name) {
-        SHELL -> AgentRunner.shell(ctx, env, args.optString("command", "").trim())
+        SHELL -> AgentRunner.shell(ctx, env, args.optString("command", "").trim(), onLine)
 
         READ -> AgentRunner.readFile(
             ctx, env,

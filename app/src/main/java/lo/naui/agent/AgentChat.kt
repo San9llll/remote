@@ -127,7 +127,14 @@ object AgentChat {
                     AgentTaskStore.setRunningTool(label, guessHint(call.name, call.args))
 
                     val t0 = System.currentTimeMillis()
-                    val result = AgentTools.run(ctx, env, call.name, call.args, askUser)
+                    val result = AgentTools.run(
+                        ctx, env, call.name, call.args, askUser,
+                        // 逐行看输出，认出下载进度和速度就更新到界面上
+                        onLine = { line ->
+                            Progress.parse(line)?.let { AgentTaskStore.setToolProgress(it) }
+                            Progress.speed(line)?.let { AgentTaskStore.setToolSpeed(it) }
+                        },
+                    )
                     val cost = System.currentTimeMillis() - t0
                     AgentTaskStore.setRunningTool("", "")
 

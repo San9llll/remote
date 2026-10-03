@@ -844,11 +844,17 @@ private fun Bubble(
  * 自己画：一条来回跑的高光。不引第三方进度条组件，省得版本对不上。
  */
 @Composable
-private fun RunningBar(label: String, hint: String) {
+private fun RunningBar(
+    label: String,
+    hint: String,
+    progress: Float = -1f,
+    speed: String = "",
+) {
     // 颜色得在外面先取 —— Canvas 的 DrawScope 里读不了 MiuixTheme
     val barColor = MiuixTheme.colorScheme.primary
     val trackColor = MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.18f)
 
+    // 算不出真实进度时用这条来回跑的高光
     val transition = rememberInfiniteTransition(label = "bar")
     val phase by transition.animateFloat(
         initialValue = 0f,
@@ -858,6 +864,14 @@ private fun RunningBar(label: String, hint: String) {
             repeatMode = RepeatMode.Restart,
         ),
         label = "bar_phase",
+    )
+
+    val hasReal = progress in 0f..1f
+    // 真进度也用动画包一下，免得一跳一跳的
+    val shown by animateFloatAsState(
+        targetValue = if (hasReal) progress else 0f,
+        animationSpec = tween(320),
+        label = "bar_progress",
     )
 
     Column(
@@ -874,11 +888,29 @@ private fun RunningBar(label: String, hint: String) {
                 color = MiuixTheme.colorScheme.primary,
             )
             Spacer(Modifier.weight(1f))
-            Text(
-                label,
-                fontSize = 10.sp,
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-            )
+            // 右边：速度 + 百分比（有就显示，没有就显示工具名）
+            if (hasReal) {
+                if (speed.isNotBlank()) {
+                    Text(
+                        speed,
+                        fontSize = 10.sp,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text(
+                    (shown * 100).toInt().toString() + "%",
+                    fontSize = 10.5.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MiuixTheme.colorScheme.primary,
+                )
+            } else {
+                Text(
+                    label,
+                    fontSize = 10.sp,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                )
+            }
         }
         Spacer(Modifier.height(6.dp))
         Box(
@@ -888,17 +920,28 @@ private fun RunningBar(label: String, hint: String) {
                 .clip(RoundedCornerShape(2.dp))
                 .background(trackColor),
         ) {
-            // 一段来回跑的高光
             androidx.compose.foundation.Canvas(Modifier.fillMaxWidth().height(3.dp)) {
                 val w = size.width
-                val barW = w * 0.34f
-                val x = (w + barW) * phase - barW
-                drawRoundRect(
-                    color = barColor,
-                    topLeft = androidx.compose.ui.geometry.Offset(x, 0f),
-                    size = androidx.compose.ui.geometry.Size(barW, size.height),
-                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.height / 2f),
-                )
+                if (hasReal) {
+                    // 真实进度：一条从 0 长到那儿的实条
+                    val filled = (w * shown).coerceIn(0f, w)
+                    drawRoundRect(
+                        color = barColor,
+                        topLeft = androidx.compose.ui.geometry.Offset(0f, 0f),
+                        size = androidx.compose.ui.geometry.Size(filled, size.height),
+                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.height / 2f),
+                    )
+                } else {
+                    // 算不出进度：一段来回跑的高光
+                    val barW = w * 0.34f
+                    val x = (w + barW) * phase - barW
+                    drawRoundRect(
+                        color = barColor,
+                        topLeft = androidx.compose.ui.geometry.Offset(x, 0f),
+                        size = androidx.compose.ui.geometry.Size(barW, size.height),
+                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.height / 2f),
+                    )
+                }
             }
         }
     }
@@ -994,6 +1037,8 @@ private fun StreamingBubble() {
     val steps = lo.naui.agent.AgentTaskStore.streamingSteps
     val runningTool = lo.naui.agent.AgentTaskStore.runningTool
     val runningToolHint = lo.naui.agent.AgentTaskStore.runningToolHint
+    val toolProgress = lo.naui.agent.AgentTaskStore.toolProgress
+    val toolSpeed = lo.naui.agent.AgentTaskStore.toolSpeed
     val shape = RoundedCornerShape(16.dp)
 
     var shown by remember { mutableStateOf(false) }
@@ -1088,6 +1133,8 @@ private fun StreamingBubble() {
                             RunningBar(
                                 label = runningTool,
                                 hint = runningToolHint,
+                                progress = toolProgress,
+                                speed = toolSpeed,
                             )
                         }
 

@@ -48,11 +48,18 @@ object DangerGuard {
             consequence = "系统无法启动、所有照片和聊天记录丢失、" +
                 "应用密钥与锁屏密码异常，严重时直接变砖。",
             regexes = listOf(
-                """rm\s+-[a-zA-Z]*[rR][a-zA-Z]*f[a-zA-Z]*\s+(/\s*$|/\*|/\s)""",
-                """rm\s+-[a-zA-Z]*f[a-zA-Z]*[rR][a-zA-Z]*\s+(/\s*$|/\*|/\s)""",
-                """rm\s+-[a-zA-Z]*[rR][a-zA-Z]*f[a-zA-Z]*\s+/(system|vendor|product|data|cache|boot|sdcard|storage/emulated|mnt)\b""",
-                """rm\s+-[a-zA-Z]*f[a-zA-Z]*[rR][a-zA-Z]*\s+/(system|vendor|product|data|cache|boot|sdcard|storage/emulated|mnt)\b""",
-                """rm\s+.*\s/data/(system|misc/keystore)\b""",
+                // ⚠️ 这里**故意放宽**：只要在删东西就问，不强求带 -f/-r。
+                // 之前只认 `rm -rf` 这类，结果 AI 用普通 `rm` 删文件时完全不拦 ——
+                // 用户报"拦截没生效"就是这么来的。
+                """\brm\s+""",
+                """\brmdir\s+""",
+                """\bshred\s+""",
+                """\bunlink\s+""",
+                // 移动/覆盖也可能把东西弄没
+                """\bmv\s+[^\n]*\s/(system|vendor|data|sdcard|storage/emulated)\b""",
+                // 清空文件
+                """>\s*/dev/null\s*$""",
+                """truncate\s+-s\s*0""",
             ),
         ),
         Category(
@@ -149,6 +156,14 @@ object DangerGuard {
             ),
         ),
         Category(
+            id = "outside_user_area",
+            label = "改动 sdcard 之外的文件",
+            note = "不在你自己的地盘里",
+            consequence = "这个路径不在 /storage/emulated/0 或 /sdcard 下面。" +
+                "动这里的东西可能影响系统或别的应用，改坏了不一定能恢复。",
+            regexes = emptyList(),   // 这一条靠 checkWrite / checkCommandTargets 判，不走正则
+        ),
+        Category(
             id = "flash",
             label = "刷机 / fastboot",
             note = "变砖、清数据",
@@ -172,6 +187,8 @@ object DangerGuard {
         val c = command.replace(Regex("\\s+"), " ").trim()
 
         CATEGORIES.forEach { cat ->
+            // 有些类别（比如"改动 sdcard 之外"）不走正则，是另外判的
+            if (cat.regexes.isEmpty()) return@forEach
             cat.regexes.forEach { pattern ->
                 val m = runCatching { Regex(pattern, RegexOption.IGNORE_CASE).find(c) }.getOrNull()
                 if (m != null) return Hit(cat, m.value.trim())
@@ -180,26 +197,103 @@ object DangerGuard {
         return null
     }
 
-    /** 写文件时碰到这些目录也要问 */
-    private val SENSITIVE_PATHS = listOf(
+    /**
+     * 用户自己的地盘。
+     *
+     * 用户的要求：**在这两个之外动任何文件都要问** ——
+     * 因为 sdcard 里是他自己的照片文档，出事了看得见；系统目录出事了直接开不了机。
+     */
+    private val USER_AREAS = listOf(
+        "/storage/emulated/0",
+        "/sdcard",
+        "/storage/self/primary",
+        "/mnt/sdcard",
+    )
+
+    /** 这个绝对路径是不是在用户地盘之外 */
+    fun isOutsideUserArea(path: String): Boolean {
+        if (path.isBlank()) return false
+        val p = path.lowercase()
+        // 相对路径算"在沙箱里"，交给沙箱自身的围栏管
+        if (!p.startsWith("/")) return false
+        return USER_AREAS.none { p == it || p.startsWith(it + "/") }
+    }
+
+    private val SENSITIVE_ANY = listOf(
         "/system", "/vendor", "/product", "/boot", "/data/adb",
         "/data/system", "/data/misc", "/dev/block", "/proc/sys",
         "/sys/fs/selinux", "/init.rc",
     )
 
+    /**
+     * 改动文件要不要先问。
+     *
+     * 规则很简单：**只要不在 sdcard / /storage/emulated/0 底下，就得问**。
+     */
     fun checkWrite(path: String): Hit? {
+        if (path.isBlank()) return null
+        if (!isOutsideUserArea(path)) return null
+
         val p = path.lowercase()
-        val hit = SENSITIVE_PATHS.firstOrNull { p.startsWith(it) } ?: return null
-        val cat = CATEGORIES.first { it.id == "boot_config" }
-        return Hit(cat, "写文件：" + path + "（落在 " + hit + " 里）")
+        val cat = CATEGORIES.firstOrNull { c ->
+            c.id == "boot_config" && SENSITIVE_ANY.any { p.startsWith(it) }
+        } ?: CATEGORIES.firstOrNull { it.id == "outside_user_area" } ?: CATEGORIES.first()
+
+        return Hit(cat, "写文件：" + path)
     }
 
+    /**
+     * 命令里要改文件、而且改到了 sdcard 外头 —— 也该问。
+     *
+     * 这是"看命令文本猜"，不可能滴水不漏；但能拦住
+     * `echo x > /system/build.prop`、`sed -i ... /vendor/...` 这类最常见的。
+     */
+    private val WRITE_VERBS = listOf(
+        "rm ", "rmdir ", "mv ", "cp ", "chmod ", "chown ", "touch ",
+        "mkdir ", "ln ", "truncate ", "dd ", "tee ", "sed -i", "unzip ",
+    )
+
+    private val ABS_PATH = Regex("(/[A-Za-z0-9_./\\-]+)")
+
+    fun checkCommandTargets(command: String): Hit? {
+        if (command.isBlank()) return null
+        val c = command.lowercase()
+
+        // 得先是在动文件
+        if (WRITE_VERBS.none { c.contains(it) } && !c.contains(">")) return null
+
+        val paths = ABS_PATH.findAll(command).map { it.groupValues[1] }
+            .filter { it.length > 3 }
+            .toList()
+        if (paths.isEmpty()) return null
+
+        val outside = paths.filter { isOutsideUserArea(it) }
+        // /dev/null 这种别烦人
+        val meaningful = outside.filterNot {
+            it.startsWith("/dev/null") || it.startsWith("/dev/std")
+        }
+        if (meaningful.isEmpty()) return null
+
+        val cat = CATEGORIES.firstOrNull { it.id == "outside_user_area" } ?: CATEGORIES.first()
+        return Hit(cat, meaningful.first())
+    }
     /** 不管什么工具，统一过一道 */
     fun risk(tool: String, args: JSONObject): Hit? = when (tool) {
-        AgentTools.SHELL -> check(args.optString("command", ""))
+        AgentTools.SHELL -> {
+            val cmd = args.optString("command", "")
+            // 先看是不是危险命令（rm / dd / mkfs 这些）；
+            // 不是的话再看"它要改哪儿" —— 改到 sdcard 外头一样要问
+            check(cmd) ?: checkCommandTargets(cmd)
+        }
         AgentTools.WRITE -> checkWrite(args.optString("path", ""))
         else -> null
     }
+
+    /**
+     * 只判"要不要问"，不问**问了之后算不算危险**。
+     * 给界面显示用：让用户能看出来"这次到底过没过检查"。
+     */
+    fun describe(hit: Hit?): String = hit?.category?.label ?: "无",
 
     /** 碰上危险动作怎么办 */
     enum class Policy(val id: String, val label: String, val summary: String) {

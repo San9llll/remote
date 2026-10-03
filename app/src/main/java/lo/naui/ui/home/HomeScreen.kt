@@ -1,7 +1,5 @@
 package lo.naui.ui.home
 
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import android.os.Build
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -66,8 +64,13 @@ fun HomeScreen(
     // 拉一次就把设备/权限信息重新问一遍，这样"下拉刷新"是真有东西刷新的
     var deviceLine by remember { mutableStateOf("") }
     var lspLine by remember { mutableStateOf("") }
+    // 当前能拿到的最高权限（没有就 null，那一行整个不显示）
+    var topPriv by remember { mutableStateOf<lo.naui.sys.TopPrivilege?>(null) }
 
-    suspend fun reload() {
+    suspend fun reload(changeHero: Boolean = false) {
+        // 下拉刷新的时候顺手换一张大图 —— 用户要的"上滑刷新时切换"
+        if (changeHero) prefs?.nextHero(ctx)
+        topPriv = runCatching { Privilege.topInfo(ctx) }.getOrNull()
         deviceLine = Build.MANUFACTURER + " " + Build.MODEL
         // 右边那栏显示 LSPosed 的状态 —— 用户要的"LSP 权限"
         lspLine = when {
@@ -99,7 +102,7 @@ fun HomeScreen(
             onRefresh = {
                 refreshing = true
                 scope.launch {
-                    reload()
+                    reload(changeHero = true)   // 刷新顺便换张大图
                     refreshing = false
                 }
             },
@@ -128,17 +131,7 @@ fun HomeScreen(
                     modifier = Modifier
                         .padding(horizontal = 14.dp)
                         .fillMaxWidth()
-                        .height(layout.heroHeight)
-                        .pointerInput(Unit) {
-                            var dy = 0f
-                            detectVerticalDragGestures(
-                                onDragStart = { dy = 0f },
-                                onDragEnd = {
-                                    // 往上滑够了就换 —— 阈值小一点，手感轻
-                                    if (dy < -60f) prefs?.nextHero(ctx)
-                                },
-                            ) { _, drag -> dy += drag }
-                        },
+                        .height(layout.heroHeight),
                 )
 
                 // 问候：上面小字改成时间词（原来是 Nakour），下面是日语 + 中文翻译
@@ -152,16 +145,51 @@ fun HomeScreen(
                         .padding(top = 18.dp),
                 )
 
-                SceneStatusStrip(
-                    leftTitle = "设备",
-                    leftValue = deviceLine.ifBlank { Build.MANUFACTURER + " " + Build.MODEL },
-                    rightTitle = "LSP 权限",
-                    rightValue = lspLine.ifBlank { "—" },
+                // ---- 权限卡（v0.30 那个样子）----
+                //
+                // 上面那行是"当前能拿到的最高权限"：有 root 就写 APatch / KernelSU / Magisk
+                // 加版本，只有 Shizuku 就写 Shizuku，普通用户这一行整个不显示。
+                // 下面才是左设备 / 右 LSP。
+                GlassCard(
+                    backdrop = backdrop,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 22.dp)
-                        .padding(bottom = 18.dp),
-                )
+                        .padding(horizontal = 14.dp)
+                        .padding(top = 18.dp),
+                    contentPadding = 18.dp,
+                ) {
+                    Column(Modifier.fillMaxWidth()) {
+                        val p = topPriv
+                        if (p != null) {
+                            Text(
+                                p.title,
+                                fontSize = 22.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                p.subtitle,
+                                fontSize = 12.sp,
+                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            )
+                            Spacer(Modifier.height(14.dp))
+                            Box(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .height(1.dp)
+                                    .background(MiuixTheme.colorScheme.dividerLine)
+                            )
+                            Spacer(Modifier.height(14.dp))
+                        }
+
+                        SceneStatusStrip(
+                            leftTitle = "设备",
+                            leftValue = deviceLine.ifBlank { Build.MANUFACTURER + " " + Build.MODEL },
+                            rightTitle = "LSP 权限",
+                            rightValue = lspLine.ifBlank { "—" },
+                        )
+                    }
+                }
 
                 Spacer(Modifier.height(28.dp))
             }

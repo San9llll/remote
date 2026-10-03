@@ -406,19 +406,50 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
                             kotlin.math.hypot(size.width - cx, size.height - cy),
                         )
                         val radius = (maxR * p).coerceAtLeast(1f)
+                        // 分界那圈液态玻璃 —— 画三层才有"玻璃"的厚度感：
+                        //   ① 外面一大圈很淡的雾（折射的边缘）
+                        //   ② 中间那圈比较亮（玻璃的边）
+                        //   ③ 最里一条细白线（玻璃的高光）
+                        val center = androidx.compose.ui.geometry.Offset(cx, cy)
+
+                        // ① 雾
                         drawCircle(
                             brush = androidx.compose.ui.graphics.Brush.radialGradient(
                                 colors = listOf(
                                     androidx.compose.ui.graphics.Color.Transparent,
-                                    androidx.compose.ui.graphics.Color.White.copy(alpha = 0.30f * a),
+                                    androidx.compose.ui.graphics.Color.White.copy(alpha = 0.10f * a),
                                     androidx.compose.ui.graphics.Color.Transparent,
                                 ),
-                                center = androidx.compose.ui.geometry.Offset(cx, cy),
+                                center = center,
                                 radius = radius,
                             ),
                             radius = radius,
-                            center = androidx.compose.ui.geometry.Offset(cx, cy),
-                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 22.dp.toPx()),
+                            center = center,
+                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 48.dp.toPx()),
+                        )
+
+                        // ② 玻璃的边
+                        drawCircle(
+                            brush = androidx.compose.ui.graphics.Brush.radialGradient(
+                                colors = listOf(
+                                    androidx.compose.ui.graphics.Color.Transparent,
+                                    androidx.compose.ui.graphics.Color.White.copy(alpha = 0.42f * a),
+                                    androidx.compose.ui.graphics.Color.Transparent,
+                                ),
+                                center = center,
+                                radius = radius,
+                            ),
+                            radius = radius,
+                            center = center,
+                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 26.dp.toPx()),
+                        )
+
+                        // ③ 高光细线
+                        drawCircle(
+                            color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.55f * a),
+                            radius = radius,
+                            center = center,
+                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx()),
                         )
                     }
                 }

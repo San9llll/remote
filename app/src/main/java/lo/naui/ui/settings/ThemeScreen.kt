@@ -1,5 +1,12 @@
 package lo.naui.ui.settings
 
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -407,68 +414,113 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
             item(key = "background") {
                 SectionTitle("背景")
                 SettingsCard(index = 5) {
-                    // ---- 样式三选一 ----
-                    // 1 / 2 是打包在 assets 里的两套（用户自己挑的图），
-                    // 选了就随机挑一张；自定义才用下面那些自己设的。
+                    // ---- 样式三选一（1 / 2 / 加号）----
+                    //
+                    // 三个选项**在同一个块里**，选中那个是一块滑过去的高亮，
+                    // 动画跟底部那条悬浮液态玻璃导航栏是一套做法。
+                    // 图标用的是压缩包里那两张按钮图（bg/btn_nk.png / btn_gc.png）。
                     Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp)) {
-                        Text(
-                            "样式",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                        )
+                        Text("样式", fontSize = 13.sp, fontWeight = FontWeight.Medium)
                         Spacer(Modifier.height(8.dp))
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            BgStyle.entries.forEach { st ->
-                                val on = prefs.bgStyle == st
-                                // 记一下这个按钮在屏幕上的位置，换背景时从这儿扩散
-                                var cx by remember { mutableFloatStateOf(0.5f) }
-                                var cy by remember { mutableFloatStateOf(0.5f) }
-                                val screenW = androidx.compose.ui.platform.LocalConfiguration
-                                    .current.screenWidthDp.coerceAtLeast(1)
-                                val screenH = androidx.compose.ui.platform.LocalConfiguration
-                                    .current.screenHeightDp.coerceAtLeast(1)
 
-                                Box(
-                                    Modifier
-                                        .weight(1f)
-                                        .onGloballyPositioned { coords ->
-                                            val pos = coords.positionInWindow()
-                                            cx = (pos.x + coords.size.width / 2f) / screenW
-                                            cy = (pos.y + coords.size.height / 2f) / screenH
+                        val density = androidx.compose.ui.platform.LocalDensity.current
+                        val cfg = androidx.compose.ui.platform.LocalConfiguration.current
+                        val screenW = with(density) { cfg.screenWidthDp.dp.toPx() }.coerceAtLeast(1f)
+                        val screenH = with(density) { cfg.screenHeightDp.dp.toPx() }.coerceAtLeast(1f)
+
+                        // 高亮块滑过去的进度
+                        val idx = BgStyle.entries.indexOf(prefs.bgStyle).coerceAtLeast(0)
+                        val slide by animateFloatAsState(
+                            targetValue = idx.toFloat(),
+                            animationSpec = spring(
+                                dampingRatio = 0.82f,
+                                stiffness = Spring.StiffnessMediumLow,
+                            ),
+                            label = "bgseg",
+                        )
+
+                        BoxWithConstraints(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(50))
+                                .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+                                .padding(4.dp),
+                        ) {
+                            val segW = maxWidth / 3
+
+                            // 滑过去的那块
+                            Box(
+                                Modifier
+                                    .offset(x = segW * slide)
+                                    .width(segW)
+                                    .height(38.dp)
+                                    .clip(RoundedCornerShape(50))
+                                    .background(MiuixTheme.colorScheme.primary),
+                            )
+
+                            Row(Modifier.fillMaxWidth()) {
+                                BgStyle.entries.forEach { st ->
+                                    // 记位置：换背景时从这儿扩散
+                                    var cx by remember { mutableFloatStateOf(0.5f) }
+                                    var cy by remember { mutableFloatStateOf(0.5f) }
+
+                                    Box(
+                                        Modifier
+                                            .width(segW)
+                                            .height(38.dp)
+                                            .onGloballyPositioned { coords ->
+                                                val pos = coords.positionInWindow()
+                                                cx = (pos.x + coords.size.width / 2f) / screenW
+                                                cy = (pos.y + coords.size.height / 2f) / screenH
+                                            }
+                                            .clip(RoundedCornerShape(50))
+                                            .clickable {
+                                                lo.naui.ui.theme.BgRipples.add(cx, cy)
+                                                prefs.updateBgStyle(st)
+                                            },
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        val on = prefs.bgStyle == st
+                                        val tint = if (on) MiuixTheme.colorScheme.onPrimary
+                                        else MiuixTheme.colorScheme.onSurface
+
+                                        when (st) {
+                                            // 1 和 2 用压缩包里那两张按钮图
+                                            BgStyle.Nk, BgStyle.Gc -> {
+                                                val bmp = remember(st) {
+                                                    val n = if (st == BgStyle.Nk) "bg/btn_nk.png" else "bg/btn_gc.png"
+                                                    lo.naui.ui.theme.BuiltinBg.load(ctx, n)
+                                                }
+                                                if (bmp != null) {
+                                                    androidx.compose.foundation.Image(
+                                                        bitmap = bmp.asImageBitmap(),
+                                                        contentDescription = st.label,
+                                                        modifier = Modifier.height(20.dp),
+                                                    )
+                                                } else {
+                                                    Text(st.label, fontSize = 13.sp, color = tint)
+                                                }
+                                            }
+                                            // 自定义就是个加号
+                                            BgStyle.Custom -> {
+                                                Text(
+                                                    "＋",
+                                                    fontSize = 20.sp,
+                                                    color = tint,
+                                                )
+                                            }
                                         }
-                                        .clip(RoundedCornerShape(50))
-                                        .background(
-                                            if (on) MiuixTheme.colorScheme.primary
-                                            else MiuixTheme.colorScheme.surfaceContainerHigh
-                                        )
-                                        .clickable {
-                                            // 从按钮中心起一圈，再换风格 ——
-                                            // 1 秒内连点会叠着来（BgRipples 存的是列表）
-                                            lo.naui.ui.theme.BgRipples.add(cx, cy)
-                                            prefs.updateBgStyle(st)
-                                        }
-                                        .padding(vertical = 9.dp),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    Text(
-                                        st.label,
-                                        fontSize = 12.5.sp,
-                                        fontWeight = if (on) FontWeight.Medium else FontWeight.Normal,
-                                        color = if (on) MiuixTheme.colorScheme.onPrimary
-                                        else MiuixTheme.colorScheme.onSurface,
-                                    )
+                                    }
                                 }
                             }
                         }
+
                         Spacer(Modifier.height(6.dp))
                         Text(
                             when (prefs.bgStyle) {
                                 BgStyle.Nk -> "样式 1 · 内置 " +
                                     lo.naui.ui.theme.BuiltinBg.heroAssets(ctx, BgStyle.Nk).size +
-                                    " 张，每次启动随机挑，主页上滑换下一张"
+                                    " 张，上滑刷新换一张"
                                 BgStyle.Gc -> "样式 2 · 内置 " +
                                     lo.naui.ui.theme.BuiltinBg.heroAssets(ctx, BgStyle.Gc).size +
                                     " 张，权限弹窗也有专属背景"

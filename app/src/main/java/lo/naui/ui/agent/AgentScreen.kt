@@ -2,6 +2,7 @@
 
 package lo.naui.ui.agent
 
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.infiniteRepeatable
@@ -535,6 +536,18 @@ fun AgentScreen(
         ) {
             // 磨砂玻璃：只 blur，不做折射
             val bd = lo.naui.ui.component.LocalGlassBackdrop.current
+
+            // 权限弹窗的背景图。
+            // 用户压缩包里只给了样式 2（gc）那三张（assets/bg/gc_dialog）。
+            // 所以只有选了 2 才有 —— 没图就还是纯磨砂玻璃。
+            val dlgBg = remember(lo.naui.ui.theme.Prefs.current?.bgStyle) {
+                val st = lo.naui.ui.theme.Prefs.current?.bgStyle
+                if (st == lo.naui.ui.theme.BgStyle.Gc) {
+                    val path = lo.naui.ui.theme.BuiltinBg.randomDialog(ctx, st)
+                    lo.naui.ui.theme.BuiltinBg.load(ctx, path)
+                } else null
+            }
+
             Column(
                 Modifier
                     .padding(horizontal = 20.dp)
@@ -554,6 +567,18 @@ fun AgentScreen(
                     )
                     .padding(20.dp),
             ) {
+                // 底图铺在最下面（有才铺）
+                dlgBg?.let { bmp ->
+                    androidx.compose.foundation.Image(
+                        bitmap = bmp.asImageBitmap(),
+                        contentDescription = null,
+                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                        modifier = Modifier
+                            .matchParentSize()
+                            .alpha(0.30f),
+                    )
+                }
+
                 Text("危险请求", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
 
                 Spacer(Modifier.height(10.dp))

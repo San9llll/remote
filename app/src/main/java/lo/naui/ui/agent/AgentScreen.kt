@@ -1116,12 +1116,15 @@ private fun StreamingBubble() {
                                     }
                                 }
                                 Spacer(Modifier.height(6.dp))
+                                // ⚠️ 显示**最后一段**，不是开头。
+                                // 以前直接 Text(reasoning, maxLines=10)，超了就从尾巴截断，
+                                // 结果一直在看开头那几行，新想出来的东西全被挡住了 ——
+                                // 用户说的"思考内容显示不要固定，有新的要显示出来"就是它。
                                 Text(
-                                    reasoning,
+                                    if (reasoning.length > 420) "…\n" + reasoning.takeLast(420)
+                                    else reasoning,
                                     fontSize = 11.sp,
                                     color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                                    maxLines = 10,
-                                    overflow = TextOverflow.Ellipsis,
                                 )
                             }
                         }
@@ -1154,10 +1157,19 @@ private fun StreamingBubble() {
                             )
                         }
 
-                        // 已经用过的工具，实时往上加
+                        // 已经用过的工具。只露最近 4 条 —— 跑几十轮的时候
+                        // 全列出来会把新的一直挤到屏幕外，看不到正在发生什么
                         if (steps.isNotEmpty()) {
                             Spacer(Modifier.height(8.dp))
-                            StepList(steps)
+                            if (steps.size > 4) {
+                                Text(
+                                    "…前面还有 " + (steps.size - 4) + " 步",
+                                    fontSize = 10.sp,
+                                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                )
+                                Spacer(Modifier.height(2.dp))
+                            }
+                            StepList(steps.takeLast(4))
                         }
                     }
                 }
@@ -1454,7 +1466,7 @@ private fun ModelSheet(onDismiss: () -> Unit) {
         Text("工具调用上限", fontSize = 13.sp, fontWeight = FontWeight.Medium)
         Spacer(Modifier.height(4.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            listOf(4, 8, 16, 32).forEach { v ->
+            listOf(0, 8, 16, 32).forEach { v ->
                 val on = AgentStore.maxToolRounds == v
                 Box(
                     Modifier
@@ -1469,7 +1481,7 @@ private fun ModelSheet(onDismiss: () -> Unit) {
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
-                        v.toString() + " 轮",
+                        if (v == 0) "不限" else v.toString() + " 轮",
                         fontSize = 11.5.sp,
                         color = if (on) MiuixTheme.colorScheme.onPrimary else MiuixTheme.colorScheme.onSurface,
                     )
@@ -1478,7 +1490,10 @@ private fun ModelSheet(onDismiss: () -> Unit) {
         }
         Spacer(Modifier.height(3.dp))
         Text(
-            "一次对话里它最多来回调这么多轮工具，撞上限会停下来等你说话",
+            if (AgentStore.maxToolRounds == 0)
+                "选了不限：它会一直干到出结果为止（内部压了 500 轮的顶，防跑飞）"
+            else
+                "一次对话里它最多来回调这么多轮工具，撞上限会停下来等你说话",
             fontSize = 10.sp,
             color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
         )

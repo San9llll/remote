@@ -40,7 +40,31 @@ data class ToolResult(
  */
 object AgentRunner {
 
-    private const val TIMEOUT_SEC = 25L
+    /**
+     * 命令最多跑多久。
+     *
+     * ⚠️ 以前是**写死 25 秒**，这是个硬伤：
+     * 下个大文件 25 秒根本下不完 → 每次都被掐 → AI 以为失败 → 反复重试，
+     * 实机上表现成"用了 51 次工具、想了 30 次还没下好"。
+     *
+     * 现在按命令分档，慢活儿给足时间。
+     */
+    private fun timeoutFor(cmd: String): Long {
+        val c = cmd.lowercase()
+        return when {
+            // 下载 / 装东西 / 解压：给 15 分钟
+            c.contains("curl") || c.contains("wget") ||
+                c.contains("git clone") || c.contains("git pull") ||
+                c.contains("apt ") || c.contains("pkg ") ||
+                c.contains("unzip") || c.contains("tar ") ||
+                c.contains("pip ") || c.contains("npm ") -> 900L
+            // 一般的编译 / 压缩
+            c.contains("gradle") || c.contains("make") ||
+                c.contains("zip ") || c.contains("7z ") -> 300L
+            // 其它
+            else -> 60L
+        }
+    }
     private const val MAX_OUTPUT = 24_000
 
     fun sandboxRoot(ctx: Context): File = File(ctx.filesDir, "sandbox").apply { mkdirs() }
@@ -190,17 +214,35 @@ object AgentRunner {
         }
 
         val p = pb.start()
+        val limit = timeoutFor(cmd)
 
-        // 逐行读，边读边吐给回调 —— 这样下载进度能实时更新
+        // 逐行读，边读边吐给回调 —— 这样下载进度能实时更新。
+        // 读不能在主线程干等，得和超时一起管，不然大文件会把整个流程吊死。
         val sb = StringBuilder()
-        p.inputStream.bufferedReader().useLines { lines ->
-            lines.forEach { line ->
-                sb.append(line).append('\n')
-                onLine?.invoke(line)
+        val reader = Thread {
+            runCatching {
+                p.inputStream.bufferedReader().useLines { lines ->
+                    lines.forEach { line ->
+                        sb.append(line).append('\n')
+                        onLine?.invoke(line)
+                    }
+                }
             }
         }
-        p.waitFor(TIMEOUT_SEC, TimeUnit.SECONDS)
-        p.destroy()
+        reader.isDaemon = true
+        reader.start()
+
+        val done = p.waitFor(limit, TimeUnit.SECONDS)
+        if (!done) {
+            runCatching { p.destroyForcibly() }
+            val got = sb.length
+            sb.append('\n').append(
+                "【命令跑了 ").append(limit).append(" 秒还没完，被这边掐断了】\n" +
+                "（到这一步已经收到 " + got + " 个字符输出。）\n" +
+                "如果是下大文件：别整段重来 —— 先看看目标文件已经下了多少，" +
+                "用 curl -C - 接着下，或者 wget -c。"
+            )
+        }
         sb.toString()
     }.getOrDefault("")
 

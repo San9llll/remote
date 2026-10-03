@@ -154,46 +154,6 @@ fun HomeSceneRail(
     Box(modifier) {
         // ---- 导轨自己的背景 ----
         Box(Modifier.fillMaxSize()) {
-            // ---- 彩色流动 ----
-            // 一层慢慢游走的彩色渐变，盖在模糊壁纸上。
-            // 用户要的是"色彩动态变化、模糊保持不变" —— 所以模糊那层一个字没动，
-            // 只是上面多了一层会呼吸的颜色。
-            //
-            // ⚠️ 这里**故意不用 rememberInfiniteTransition**。
-            // 那个是每帧（60fps）驱动一次重组，而导轨是常驻屏幕的 ——
-            // 等于整机一直有 60fps 的 recomposition 在跑，手机扛不住会降频保护
-            // （实机反馈：打开应用 CPU 被压到 480MHz）。
-            // 改成自己用 delay 驱动，约 8fps，肉眼看一样顺，CPU 掉八成。
-            var shift by remember { mutableFloatStateOf(0f) }
-            LaunchedEffect(Unit) {
-                val t0 = System.currentTimeMillis()
-                while (true) {
-                    shift = ((System.currentTimeMillis() - t0) % 9000L) / 9000f
-                    delay(120)
-                }
-            }
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .drawWithCache {
-                        val h = size.height
-                        val w = size.width
-                        // 让渐变沿着导轨慢慢往下走
-                        val y0 = -h * 0.5f + h * 2f * shift
-                        val brush = Brush.linearGradient(
-                            colors = listOf(
-                                Color(0xFF7C4DFF).copy(alpha = 0.34f),   // 紫
-                                Color(0xFF00E5FF).copy(alpha = 0.26f),   // 青
-                                Color(0xFFFF4D8D).copy(alpha = 0.32f),   // 粉
-                                Color(0xFF7C4DFF).copy(alpha = 0.34f),   // 绕回紫，首尾接得上
-                            ),
-                            start = androidx.compose.ui.geometry.Offset(0f, y0),
-                            end = androidx.compose.ui.geometry.Offset(w, y0 + h * 0.9f),
-                        )
-                        onDrawBehind { drawRect(brush) }
-                    },
-            )
-
             if (wallpaper != null) {
                 Image(
                     bitmap = wallpaper,
@@ -232,6 +192,45 @@ fun HomeSceneRail(
                         )
                     )
                 )
+            )
+            // ---- 彩色流动 ----
+            // 一层慢慢游走的彩色渐变，盖在模糊壁纸上。
+            // 用户要的是"色彩动态变化、模糊保持不变" —— 所以模糊那层一个字没动，
+            // 只是上面多了一层会呼吸的颜色。
+            //
+            // ⚠️ 这里**故意不用 rememberInfiniteTransition**。
+            // 那个是每帧（60fps）驱动一次重组，而导轨是常驻屏幕的 ——
+            // 等于整机一直有 60fps 的 recomposition 在跑，手机扛不住会降频保护
+            // （实机反馈：打开应用 CPU 被压到 480MHz）。
+            // 改成自己用 delay 驱动，约 8fps，肉眼看一样顺，CPU 掉八成。
+            var shift by remember { mutableFloatStateOf(0f) }
+            LaunchedEffect(Unit) {
+                val t0 = System.currentTimeMillis()
+                while (true) {
+                    shift = ((System.currentTimeMillis() - t0) % 9000L) / 9000f
+                    delay(120)
+                }
+            }
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .drawWithCache {
+                        val h = size.height
+                        val w = size.width
+                        // 让渐变沿着导轨慢慢往下走
+                        val y0 = -h * 0.5f + h * 2f * shift
+                        val brush = Brush.linearGradient(
+                            colors = listOf(
+                                Color(0xFF7C4DFF).copy(alpha = 0.34f),   // 紫
+                                Color(0xFF00E5FF).copy(alpha = 0.26f),   // 青
+                                Color(0xFFFF4D8D).copy(alpha = 0.32f),   // 粉
+                                Color(0xFF7C4DFF).copy(alpha = 0.34f),   // 绕回紫，首尾接得上
+                            ),
+                            start = androidx.compose.ui.geometry.Offset(0f, y0),
+                            end = androidx.compose.ui.geometry.Offset(w, y0 + h * 0.9f),
+                        )
+                        onDrawBehind { drawRect(brush) }
+                    },
             )
         }
 

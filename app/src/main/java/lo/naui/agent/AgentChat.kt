@@ -63,7 +63,9 @@ object AgentChat {
         askUser: (suspend (DangerGuard.Hit) -> Boolean)? = null,
     ): Result<AgentRun> = withContext(Dispatchers.IO) {
         runCatching {
-            val maxRounds = AgentStore.maxToolRounds.coerceIn(1, 64)
+            // 0 / 负数 = 不限；但真无限会跑飞，所以压一个 500 的硬顶
+            val configured = AgentStore.maxToolRounds
+            val maxRounds = if (configured <= 0) 500 else configured
             val tools = AgentTools.toolsFor(env)
             val messages = JSONArray()
             history.forEach { m ->
@@ -84,6 +86,8 @@ object AgentChat {
             var spent = 0L
 
             while (round++ < maxRounds) {
+                // 新一轮 —— 这回是在跟模型说话，没在跑工具，把那条收掉
+                AgentTaskStore.updateRunningTool("", "")
                 onProgress(if (round == 1) "在想…" else "第 " + round + " 轮…")
 
                 val reply = AgentApi.stream(
@@ -106,6 +110,7 @@ object AgentChat {
                 onRound(round)
 
                 if (reply.toolCalls.isEmpty()) {
+                    AgentTaskStore.updateRunningTool("", "")
                     return@runCatching AgentRun(
                         reply = reply.text.ifBlank { "（模型没说话）" },
                         toolLog = log,
@@ -136,7 +141,10 @@ object AgentChat {
                         },
                     )
                     val cost = System.currentTimeMillis() - t0
-                    AgentTaskStore.updateRunningTool("", "")
+                    // ⚠️ 这里**故意不清**。
+                    // 以前每跑完一个工具就清一次、下一个再设一次，
+                    // 界面上那条"正在下载…"就一闪一闪（用户说的"一直闪"）。
+                    // 让它留着，等下一轮开始或者整轮结束时统一收。
 
                     // 只记"用了什么、成没成、多大动静"，命令原文不进这条
                     val line = "▸ " + label + " · " + brief +
@@ -165,7 +173,7 @@ object AgentChat {
 
             AgentRun(
                 reply = "（工具已经调了 " + maxRounds + " 轮还没完，先停一下）\n" +
-                    "想让它多跑几轮的话，去聊天页那个 ⚙ 面板里把上限调高。",
+                    "想让它多跑的话，去聊天页那个 ⚙ 面板把「工具调用上限」设成不限。",
                 toolLog = log,
                 steps = steps,
                 thinkRounds = round,

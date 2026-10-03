@@ -42,13 +42,16 @@ object AgentStore {
     /**
      * 一次对话最多让它调几轮工具。
      *
-     * 以前写死 8，一撞到就卡在"工具已经使用 8 次"。现在可配。
+     * 以前写死 8，一撞到就卡在"工具已经使用 8 次"。现在可配，**0 = 不限**。
      */
     var maxToolRounds by mutableStateOf(16)
         private set
 
     fun updateMaxToolRounds(v: Int) {
-        maxToolRounds = v.coerceIn(1, 64)
+        // **0 或负数 = 不限轮数**（用户要的"无限工具使用次数"）。
+        // 真·无限是没有的 —— AgentChat 那边压了个 500 的硬顶，
+        // 免得模型自己绕死把手机跑烫。
+        maxToolRounds = if (v <= 0) 0 else v
         sp?.edit()?.putInt("max_tool_rounds", maxToolRounds)?.apply()
     }
 

@@ -289,12 +289,6 @@ object DangerGuard {
         else -> null
     }
 
-    /**
-     * 只判"要不要问"，不问**问了之后算不算危险**。
-     * 给界面显示用：让用户能看出来"这次到底过没过检查"。
-     */
-    fun describe(hit: Hit?): String = hit?.category?.label ?: "无",
-
     /** 碰上危险动作怎么办 */
     enum class Policy(val id: String, val label: String, val summary: String) {
         Ask("ask", "每次都问", "执行前弹一下，你点同意才跑 —— 默认"),

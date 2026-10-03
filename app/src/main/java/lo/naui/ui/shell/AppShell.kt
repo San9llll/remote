@@ -366,12 +366,16 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
                         )
                     }
 
-                    // 整屏 减 圆 = 圆外那块
-                    val outside = androidx.compose.ui.graphics.Path().apply {
+                    // 整屏 减 圆 = 圆外那块。
+                    // ⚠️ Path.op 是**三参数**版本（path1, path2, operation），
+                    // 写两个参数编译期就报 "actual type is PathOperation, but Path was expected"
+                    val full = androidx.compose.ui.graphics.Path().apply {
                         addRect(
                             androidx.compose.ui.geometry.Rect(0f, 0f, size.width, size.height)
                         )
-                        op(circles, androidx.compose.ui.graphics.PathOperation.Difference)
+                    }
+                    val outside = androidx.compose.ui.graphics.Path().apply {
+                        op(full, circles, androidx.compose.ui.graphics.PathOperation.Difference)
                     }
 
                     // 圆外画旧图（ImageBitmap 直接就能 drawImage，不用绕）

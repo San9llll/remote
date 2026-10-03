@@ -45,6 +45,14 @@ data class AgentRun(
  */
 object AgentChat {
 
+    /**
+     * 一次最多带多少条历史。
+     *
+     * 太多了反而糟 —— 上下文一满，模型抓不住当前在聊什么。
+     * 30 条大约是十来轮对话，够用了。
+     */
+    private const val MAX_HISTORY = 30
+
     suspend fun run(
         ctx: Context,
         system: String,
@@ -67,13 +75,36 @@ object AgentChat {
             val configured = AgentStore.maxToolRounds
             val maxRounds = if (configured <= 0) 500 else configured
             val tools = AgentTools.toolsFor(env)
+            // ---- 组历史 ----
+            //
+            // 这里有几个讲究，都是"模型听不懂对话"的常见原因：
+            //   · 空消息**直接跳过** —— 以前拿"（空）"占位，模型会把它当真的话来回
+            //   · 带上图（content 用数组形式）—— 以前图片根本没传上去
+            //   · 只保留最近 N 条 —— 太长会超上下文，模型反而抓不住重点
             val messages = JSONArray()
-            history.forEach { m ->
-                messages.put(
-                    JSONObject()
-                        .put("role", m.role)
-                        .put("content", if (m.text.isBlank()) "（空）" else m.text)
-                )
+            val recent = if (history.size > MAX_HISTORY) history.takeLast(MAX_HISTORY) else history
+
+            recent.forEach { m ->
+                // 空消息别传
+                if (m.text.isBlank() && m.images.isEmpty()) return@forEach
+
+                if (m.role == "user" && m.images.isNotEmpty()) {
+                    // 带图的：content 得是数组 [ {text}, {image_url} ]
+                    val parts = JSONArray()
+                    if (m.text.isNotBlank()) {
+                        parts.put(JSONObject().put("type", "text").put("text", m.text))
+                    }
+                    m.images.forEach { url ->
+                        parts.put(
+                            JSONObject()
+                                .put("type", "image_url")
+                                .put("image_url", JSONObject().put("url", url))
+                        )
+                    }
+                    messages.put(JSONObject().put("role", "user").put("content", parts))
+                } else {
+                    messages.put(JSONObject().put("role", m.role).put("content", m.text))
+                }
             }
 
             val log = mutableListOf<String>()

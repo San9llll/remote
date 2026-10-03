@@ -290,9 +290,19 @@ fun AgentScreen(
         if (sending) return
         val textFiles = pending.filter { !it.isImage }
         val images = pending.filter { it.isImage }.map { it.dataUrl }
+        // 附件的写法有讲究。
+        //
+        // 以前是 "【附件 xxx.txt】内容"，模型经常把附件内容和自己要说的话
+        // 混成一段，聊着聊着就"接错话"。
+        // 现在用带名字的标签围起来，边界清楚 —— astrbot 那边也是这么做的。
         val composed = buildString {
             textFiles.forEach { a ->
-                append("【附件 ").append(a.name).append("】\n").append(a.text).append("\n\n")
+                append("<file name=\"").append(a.name).append("\">\n")
+                append(a.text)
+                append("\n</file>\n\n")
+            }
+            if (textFiles.isNotEmpty() && draft.isNotBlank()) {
+                append("（上面是附件内容，下面是我的话）\n")
             }
             append(draft)
         }.trim()

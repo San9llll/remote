@@ -1,5 +1,7 @@
 package lo.naui.ui.shell
 
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.graphics.PathOperation
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
@@ -144,7 +146,13 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
     var pageBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
 
     // 壁纸：1 / 2 走 assets 里那两套内置图（每次启动随机一张），自定义走用户选的
+    // 上一张壁纸 —— 切背景的时候要留着它当"被覆盖的那层"
+    var prevWallpaper by remember { mutableStateOf<ImageBitmap?>(null) }
+
     LaunchedEffect(prefs.bgStyle, prefs.homeImage, prefs.builtinHero) {
+        // 换之前先把当前这张记下来
+        if (wallpaper != null) prevWallpaper = wallpaper
+
         val bmp = if (prefs.bgStyle == lo.naui.ui.theme.BgStyle.Custom) {
             loadBitmap(prefs.homeImage)
         } else {
@@ -312,6 +320,105 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
                 blurred = true,
                 darkScrim = isDarkTheme,
             )
+
+            // ①.5 涟漪遮罩：切背景的时候，旧图只在"圆外"露出来
+            //
+            // 为什么这么绕：要的是"新图从点击点长出来"。
+            // 所以底下的背景层照旧画新的，上面这层把**旧图**盖住，
+            // 但裁掉扩散圆覆盖的那部分 —— 圆扩到哪儿，哪儿就露出新图。
+            // 涟漪要一帧一帧地推进，所以得有个东西持续触发重组。
+            // 没有它的话 Canvas 只会画一次，圆就停在原地了。
+            var frameTick by remember { mutableIntStateOf(0) }
+            LaunchedEffect(Unit) {
+                while (true) {
+                    if (lo.naui.ui.theme.BgRipples.active().isNotEmpty()) {
+                        frameTick++
+                    }
+                    kotlinx.coroutines.delay(16)   // ~60fps，只在有涟漪时才真正干活
+                }
+            }
+
+            val ripples = lo.naui.ui.theme.BgRipples.active()
+            @Suppress("UNUSED_EXPRESSION")
+            run { frameTick }   // 让它参与重组
+
+            if (ripples.isNotEmpty() && prevWallpaper != null) {
+                androidx.compose.foundation.Canvas(Modifier.fillMaxSize().zIndex(0.2f)) {
+                    val now = System.currentTimeMillis()
+
+                    // 把所有扩散圆并成一条路径
+                    val circles = androidx.compose.ui.graphics.Path()
+                    ripples.forEach { r ->
+                        val p = lo.naui.ui.theme.BgRipples.progressOf(r, now)
+                        val cx = size.width * r.cx
+                        val cy = size.height * r.cy
+                        val maxR = maxOf(
+                            kotlin.math.hypot(cx, cy),
+                            kotlin.math.hypot(size.width - cx, cy),
+                            kotlin.math.hypot(cx, size.height - cy),
+                            kotlin.math.hypot(size.width - cx, size.height - cy),
+                        )
+                        val radius = (maxR * p).coerceAtLeast(1f)
+                        circles.addOval(
+                            androidx.compose.ui.geometry.Rect(
+                                cx - radius, cy - radius, cx + radius, cy + radius
+                            )
+                        )
+                    }
+
+                    // 整屏 减 圆 = 圆外那块
+                    val outside = androidx.compose.ui.graphics.Path().apply {
+                        addRect(
+                            androidx.compose.ui.geometry.Rect(0f, 0f, size.width, size.height)
+                        )
+                        op(circles, androidx.compose.ui.graphics.PathOperation.Difference)
+                    }
+
+                    // 圆外画旧图（ImageBitmap 直接就能 drawImage，不用绕）
+                    val old = prevWallpaper ?: return@Canvas
+                    clipPath(outside) {
+                        drawImage(
+                            image = old,
+                            srcOffset = androidx.compose.ui.unit.IntOffset.Zero,
+                            srcSize = androidx.compose.ui.unit.IntSize(old.width, old.height),
+                            dstOffset = androidx.compose.ui.unit.IntOffset.Zero,
+                            dstSize = androidx.compose.ui.unit.IntSize(
+                                size.width.toInt(), size.height.toInt()
+                            ),
+                        )
+                    }
+
+                    // 切线：一圈液态玻璃的光，扩完慢慢淡掉
+                    ripples.forEach { r ->
+                        val p = lo.naui.ui.theme.BgRipples.progressOf(r, now)
+                        val a = lo.naui.ui.theme.BgRipples.edgeAlphaOf(r, now)
+                        if (p >= 1f || a <= 0.01f) return@forEach
+                        val cx = size.width * r.cx
+                        val cy = size.height * r.cy
+                        val maxR = maxOf(
+                            kotlin.math.hypot(cx, cy),
+                            kotlin.math.hypot(size.width - cx, cy),
+                            kotlin.math.hypot(cx, size.height - cy),
+                            kotlin.math.hypot(size.width - cx, size.height - cy),
+                        )
+                        val radius = (maxR * p).coerceAtLeast(1f)
+                        drawCircle(
+                            brush = androidx.compose.ui.graphics.Brush.radialGradient(
+                                colors = listOf(
+                                    androidx.compose.ui.graphics.Color.Transparent,
+                                    androidx.compose.ui.graphics.Color.White.copy(alpha = 0.30f * a),
+                                    androidx.compose.ui.graphics.Color.Transparent,
+                                ),
+                                center = androidx.compose.ui.geometry.Offset(cx, cy),
+                                radius = radius,
+                            ),
+                            radius = radius,
+                            center = androidx.compose.ui.geometry.Offset(cx, cy),
+                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 22.dp.toPx()),
+                        )
+                    }
+                }
+            }
 
             // ② 内容层：卡片在这里面，用 drawBackdrop 去采样上面那层
             Column(Modifier.fillMaxSize()) {

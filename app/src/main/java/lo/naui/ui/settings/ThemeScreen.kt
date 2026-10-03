@@ -1,5 +1,8 @@
 package lo.naui.ui.settings
 
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import lo.naui.ui.theme.BgStyle
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
@@ -420,15 +423,33 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
                         ) {
                             BgStyle.entries.forEach { st ->
                                 val on = prefs.bgStyle == st
+                                // 记一下这个按钮在屏幕上的位置，换背景时从这儿扩散
+                                var cx by remember { mutableFloatStateOf(0.5f) }
+                                var cy by remember { mutableFloatStateOf(0.5f) }
+                                val screenW = androidx.compose.ui.platform.LocalConfiguration
+                                    .current.screenWidthDp.coerceAtLeast(1)
+                                val screenH = androidx.compose.ui.platform.LocalConfiguration
+                                    .current.screenHeightDp.coerceAtLeast(1)
+
                                 Box(
                                     Modifier
                                         .weight(1f)
+                                        .onGloballyPositioned { coords ->
+                                            val pos = coords.positionInWindow()
+                                            cx = (pos.x + coords.size.width / 2f) / screenW
+                                            cy = (pos.y + coords.size.height / 2f) / screenH
+                                        }
                                         .clip(RoundedCornerShape(50))
                                         .background(
                                             if (on) MiuixTheme.colorScheme.primary
                                             else MiuixTheme.colorScheme.surfaceContainerHigh
                                         )
-                                        .clickable { prefs.updateBgStyle(st) }
+                                        .clickable {
+                                            // 从按钮中心起一圈，再换风格 ——
+                                            // 1 秒内连点会叠着来（BgRipples 存的是列表）
+                                            lo.naui.ui.theme.BgRipples.add(cx, cy)
+                                            prefs.updateBgStyle(st)
+                                        }
                                         .padding(vertical = 9.dp),
                                     contentAlignment = Alignment.Center,
                                 ) {

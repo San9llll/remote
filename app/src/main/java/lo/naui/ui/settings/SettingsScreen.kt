@@ -123,10 +123,11 @@ fun SettingsScreen(
                         checked = lo.naui.sys.FluidCloud.enabled,
                         onCheckedChange = { lo.naui.sys.FluidCloud.setEnabled(ctx, it) },
                         title = "流体云",
-                        summary = if (lo.naui.sys.FluidCloud.isMiui())
-                            "任务进度抬到状态栏那块小区域（小米 / 澎湃专用）"
+                        summary = if (lo.naui.sys.FluidCloud.supported())
+                            "任务进度抬到状态栏那块小胶囊（" +
+                                lo.naui.sys.FluidCloud.systemLabel() + "）"
                         else
-                            "当前不是小米系系统，开了也只有普通通知",
+                            "当前系统不认这套字段，开了也只有普通通知",
                     )
                 }
                 if (floatDenied) {

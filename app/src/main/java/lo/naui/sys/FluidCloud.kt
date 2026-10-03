@@ -11,11 +11,20 @@ import android.os.Build
 import android.os.Bundle
 
 /**
- * 流体云（小米的"焦点通知"）。
+ * 流体云 —— 把通知抬到状态栏那块小胶囊 / 灵动岛上。
  *
- * 说明白点：**流体云不是第三方能直接调的 API**。
- * 应用能做的是发一个**带了特定 extras 的通知**，MIUI 自己判断要不要把它
- * 抬到灵动岛 / 状态栏胶囊那块区域去显示。
+ * 说明白点：**这不是第三方能直接调的 API**。
+ * 应用能做的是发一个**带了特定 extras 的通知**，让系统自己判断要不要抬上去。
+ *
+ * 目前接了两家：
+ *
+ * | 系统 | 叫法 | 认的字段 |
+ * |---|---|---|
+ * | MIUI / 澎湃 | 焦点通知 / 流体云 | `miui.focus.*` |
+ * | ColorOS（OPPO / 一加 / realme） | 流体云 / 实时通知 | `oppo.focus.*` |
+ *
+ * 两套字段一起塞进去就行 —— 各家只认自己那几个，多余的会被忽略，
+ * 不是自家系统的话就是个普通通知，不会出错。
  *
  * 所以这里做的就是"把该带的字段带上"：
  *
@@ -56,6 +65,31 @@ object FluidCloud {
         sp?.edit()?.putBoolean("enabled", v)?.apply()
     }
 
+    /** 是不是 ColorOS 系（OPPO / 一加 / realme） */
+    fun isColorOs(): Boolean = runCatching {
+        val brand = android.os.Build.MANUFACTURER.lowercase()
+        val brandHit = brand.contains("oppo") || brand.contains("oneplus") ||
+            brand.contains("realme") || brand.contains("oplus")
+        // 系统属性也能佐证
+        val propHit = runCatching {
+            val cls = Class.forName("android.os.SystemProperties")
+            val get = cls.getMethod("get", String::class.java)
+            val v = get.invoke(null, "ro.build.version.opporom") as? String
+            !v.isNullOrBlank()
+        }.getOrDefault(false)
+        brandHit || propHit
+    }.getOrDefault(false)
+
+    /** 这台机器上，这套东西到底有没有用 */
+    fun supported(): Boolean = isMiui() || isColorOs()
+
+    /** 给设置页显示的一句话 */
+    fun systemLabel(): String = when {
+        isMiui() -> "小米 / 澎湃"
+        isColorOs() -> "ColorOS（OPPO / 一加 / realme）"
+        else -> ""
+    }
+
     /** 是不是小米系（不是的话这些字段没人认） */
     fun isMiui(): Boolean = runCatching {
         val p = java.lang.System.getProperty("ro.miui.ui.version.name") ?: ""
@@ -75,12 +109,23 @@ object FluidCloud {
         if (!enabled) return builder
 
         val extras = Bundle().apply {
+            // ---- 小米 / 澎湃 ----
             putBoolean("miui.focus.param", true)
             putString("miui.focus.pic_title", title)
             putString("miui.focus.pic_content", content)
-            // 流光那条样式
             putBoolean("miui.focus.ticker", true)
             putString("miui.focus.ticker.content", content)
+
+            // ---- ColorOS（OPPO / 一加 / realme）----
+            // 两套一起塞：各家只认自己那几个，多余的会被忽略
+            putBoolean("oppo.focus.param", true)
+            putString("oppo.focus.title", title)
+            putString("oppo.focus.content", content)
+            putBoolean("oppo.focus.ticker", true)
+            putString("oppo.focus.ticker.content", content)
+            // ColorOS 认这个当"实时通知"的标记
+            putBoolean("android.allowDuringSetup", false)
+            putString("oppo.notification.extra", content)
         }
         return runCatching {
             builder.setExtras(extras)

@@ -100,8 +100,19 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 private val clock = SimpleDateFormat("HH:mm", Locale.getDefault())
 
+/** 新消息的唯一 key 生成器（进程内自增就够用了） */
+private var msgSeq = 0L
+private fun nextKey(): String = "m" + (msgSeq++)
+
 /** 一条消息在界面上的样子（比 ChatMessage 多了时间、工具记录） */
 private data class UiMessage(
+    /**
+     * 列表用的唯一标识。
+     *
+     * ⚠️ 必须有这个 —— 之前拿 `at + role` 当 key，而读历史的时候每条 at 都是
+     * `System.currentTimeMillis()`（同一毫秒），**key 一撞 LazyColumn 直接抛异常闪退**。
+     */
+    val key: String,
     val role: String,
     val text: String,
     val images: Int = 0,
@@ -174,12 +185,15 @@ fun AgentScreen(
     LaunchedEffect(AgentStore.activeConvId) {
         val id = AgentStore.activeConvId ?: return@LaunchedEffect
         val stored = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { ChatDb.load(id) }
-        messages = stored.map {
+        messages = stored.mapIndexed { i, it ->
             UiMessage(
+                // 历史消息给个稳定的唯一 key；时间戳按序号错开，
+                // 不然一屏消息会显示成同一个时刻
+                key = "h" + i,
                 role = it.role,
                 text = it.text,
                 images = it.images.size,
-                at = System.currentTimeMillis(),
+                at = System.currentTimeMillis() - (stored.size - i) * 1000L,
                 toolLog = it.toolLog,
                 thinkRounds = it.thinkRounds,
                 reasoning = it.reasoning,
@@ -219,6 +233,7 @@ fun AgentScreen(
             if (r.conversationId == AgentStore.activeConvId) {
                 val text = if (r.ok) r.reply else "出错了：" + r.error
                 val next = messages + UiMessage(
+                    key = nextKey(),
                     role = "assistant",
                     text = text,
                     toolLog = r.toolLog,
@@ -253,6 +268,7 @@ fun AgentScreen(
                 if (r.conversationId == AgentStore.activeConvId) {
                     val text = if (r.ok) r.reply else "出错了：" + r.error
                     val next = messages + UiMessage(
+                        key = nextKey(),
                         role = "assistant",
                         text = text,
                         toolLog = r.toolLog,
@@ -287,7 +303,7 @@ fun AgentScreen(
             return
         }
 
-        val user = UiMessage("user", composed, images.size)
+        val user = UiMessage(nextKey(), "user", composed, images.size)
         val history = messages + user
         messages = history
         draft = ""
@@ -378,7 +394,7 @@ fun AgentScreen(
                     contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    items(messages, key = { it.at.toString() + it.role }) { m ->
+                    items(messages, key = { it.key }) { m ->
                         Bubble(
                             m = m,
                             onDelete = if (m.role == "user") {

@@ -1,5 +1,6 @@
 package lo.naui.ui.home
 
+import androidx.compose.foundation.background
 import android.os.Build
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints

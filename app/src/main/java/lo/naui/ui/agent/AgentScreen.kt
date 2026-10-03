@@ -2,6 +2,7 @@
 
 package lo.naui.ui.agent
 
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.LinearEasing
@@ -565,20 +566,34 @@ fun AgentScreen(
                             Modifier.background(sheetFillSolid)
                         }
                     )
-                    .padding(20.dp),
+                    .padding(20.dp)
+                    .drawBehind {
+                        // 权限弹窗的底图。
+                        // 不能用 Image + matchParentSize —— 那是 BoxScope 的东西，
+                        // 这里外层是 Column，编译期直接报 "cannot be called with an implicit receiver"。
+                        // 画在背景上更省事，也不会把字盖住。
+                        dlgBg?.let { bmp ->
+                            val img = bmp.asImageBitmap()
+                            val scale = maxOf(
+                                size.width / img.width,
+                                size.height / img.height,
+                            )
+                            val w = img.width * scale
+                            val h = img.height * scale
+                            drawImage(
+                                image = img,
+                                srcOffset = androidx.compose.ui.unit.IntOffset.Zero,
+                                srcSize = androidx.compose.ui.unit.IntSize(img.width, img.height),
+                                dstOffset = androidx.compose.ui.unit.IntOffset(
+                                    ((size.width - w) / 2f).toInt(),
+                                    ((size.height - h) / 2f).toInt(),
+                                ),
+                                dstSize = androidx.compose.ui.unit.IntSize(w.toInt(), h.toInt()),
+                                alpha = 0.30f,
+                            )
+                        }
+                    },
             ) {
-                // 底图铺在最下面（有才铺）
-                dlgBg?.let { bmp ->
-                    androidx.compose.foundation.Image(
-                        bitmap = bmp.asImageBitmap(),
-                        contentDescription = null,
-                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                        modifier = Modifier
-                            .matchParentSize()
-                            .alpha(0.30f),
-                    )
-                }
-
                 Text("危险请求", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
 
                 Spacer(Modifier.height(10.dp))

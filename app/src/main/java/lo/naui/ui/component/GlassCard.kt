@@ -83,7 +83,13 @@ fun GlassCard(
     content: @Composable BoxScope.() -> Unit,
 ) {
     // ---- 入场：从左边（侧栏那侧）滑进来 + 错开 + 果冻回弹 ----
-    var entered by remember { mutableStateOf(enterIndex < 0) }
+    //
+    // ⚠️ 用 rememberSaveable(而不是 remember)记住"已经播过了"。
+    // 列表滚动时卡片会反复进出组合，用 remember 的话每次滚回来都重播一遍 ——
+    // 白白多出一堆动画在跑，费电也费 CPU。
+    var entered by androidx.compose.runtime.saveable.rememberSaveable(enterIndex) {
+        mutableStateOf(enterIndex < 0)
+    }
     LaunchedEffect(enterIndex) {
         if (enterIndex >= 0) {
             kotlinx.coroutines.delay(enterIndex * 55L)   // 按序号错开

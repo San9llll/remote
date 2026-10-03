@@ -124,19 +124,19 @@ object AgentChat {
                     onProgress("正在用 " + label)
 
                     // 告诉界面"现在在跑什么"，好让进度条转起来
-                    AgentTaskStore.setRunningTool(label, guessHint(call.name, call.args))
+                    AgentTaskStore.updateRunningTool(label, guessHint(call.name, call.args))
 
                     val t0 = System.currentTimeMillis()
                     val result = AgentTools.run(
                         ctx, env, call.name, call.args, askUser,
                         // 逐行看输出，认出下载进度和速度就更新到界面上
                         onLine = { line ->
-                            Progress.parse(line)?.let { AgentTaskStore.setToolProgress(it) }
-                            Progress.speed(line)?.let { AgentTaskStore.setToolSpeed(it) }
+                            Progress.parse(line)?.let { AgentTaskStore.updateToolProgress(it) }
+                            Progress.speed(line)?.let { AgentTaskStore.updateToolSpeed(it) }
                         },
                     )
                     val cost = System.currentTimeMillis() - t0
-                    AgentTaskStore.setRunningTool("", "")
+                    AgentTaskStore.updateRunningTool("", "")
 
                     // 只记"用了什么、成没成、多大动静"，命令原文不进这条
                     val line = "▸ " + label + " · " + brief +

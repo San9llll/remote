@@ -80,18 +80,18 @@ object AgentTaskStore {
     var toolSpeed by mutableStateOf("")
         private set
 
-    fun setRunningTool(label: String, hint: String) {
+    fun updateRunningTool(label: String, hint: String) {
         runningTool = label
         runningToolHint = hint
         toolProgress = -1f
         toolSpeed = ""
     }
 
-    fun setToolProgress(p: Float) {
+    fun updateToolProgress(p: Float) {
         toolProgress = p.coerceIn(0f, 1f)
     }
 
-    fun setToolSpeed(s: String) {
+    fun updateToolSpeed(s: String) {
         toolSpeed = s
     }
 

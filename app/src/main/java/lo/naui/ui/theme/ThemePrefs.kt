@@ -306,7 +306,7 @@ class ThemePrefs(context: Context) {
     var builtinHero by mutableStateOf(sp.getString("builtin_hero", "") ?: "")
         private set
 
-    fun setBuiltinHero(path: String) {
+    fun updateBuiltinHero(path: String) {
         builtinHero = path
         sp.edit().putString("builtin_hero", path).apply()
     }
@@ -352,7 +352,7 @@ class ThemePrefs(context: Context) {
      */
     fun nextHero(ctx: android.content.Context) {
         if (bgStyle != BgStyle.Custom) {
-            BuiltinBg.randomHero(ctx, bgStyle)?.let { setBuiltinHero(it) }
+            BuiltinBg.randomHero(ctx, bgStyle)?.let { updateBuiltinHero(it) }
             return
         }
         if (heroImages.size <= 1) {

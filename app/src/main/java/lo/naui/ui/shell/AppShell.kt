@@ -152,7 +152,7 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
             var path = prefs.builtinHero
             if (path.isBlank()) {
                 path = lo.naui.ui.theme.BuiltinBg.randomHero(ctx, prefs.bgStyle).orEmpty()
-                if (path.isNotBlank()) prefs.setBuiltinHero(path)
+                if (path.isNotBlank()) prefs.updateBuiltinHero(path)
             }
             lo.naui.ui.theme.BuiltinBg.load(ctx, path)
         }

@@ -98,6 +98,6 @@ object BuiltinBg {
     fun resolve(ctx: Context, prefs: ThemePrefs): String? = when (prefs.bgStyle) {
         BgStyle.Custom -> prefs.currentHero.takeIf { it.isNotBlank() }
         else -> prefs.builtinHero.takeIf { it.isNotBlank() }
-            ?: randomHero(ctx, prefs.bgStyle)?.also { prefs.setBuiltinHero(it) }
+            ?: randomHero(ctx, prefs.bgStyle)?.also { prefs.updateBuiltinHero(it) }
     }
 }

@@ -126,6 +126,43 @@ else
   say "   OK"
 fi
 
+
+# ============================================================
+# ⑦ var 属性的隐式 setter vs 手写的 setXxx
+#
+# Kotlin 里 `var x by mutableStateOf(...)` 会生成 setX(...)。
+# 如果你还手写一个同名同参的 fun setX(...)，编译期报
+#   Platform declaration clash: ... same JVM signature
+# 这坑踩过两次（toolProgress / builtinHero），所以加一道自动检查。
+# ============================================================
+say "== ⑦ var 的隐式 setter 有没有和手写 setXxx 撞名 =="
+CLASH=$(python3 - <<'PYEOF'
+import os, re
+SRC = "app/src/main/java/lo/naui"
+for root, _, files in os.walk(SRC):
+    for fn in files:
+        if not fn.endswith(".kt"): continue
+        fp = os.path.join(root, fn)
+        src = open(fp, encoding="utf-8").read()
+        props = set()
+        for m in re.finditer(r"\bvar (\w+) by ", src):
+            n = m.group(1)
+            props.add("set" + n[0].upper() + n[1:])
+        for m in re.finditer(r"\bfun (set\w+)\s*\(([^)]*)\)", src):
+            name, params = m.group(1), m.group(2)
+            if name in props and params.count(",") == 0:
+                line = src[:m.start()].count("\n") + 1
+                print("%s:%d  %s(%s)" % (fp.replace(SRC + "/", ""), line, name, params))
+PYEOF
+)
+if [ -n "$CLASH" ]; then
+  say "$CLASH" | sed 's/^/   ✗ /'
+  say "   （属性的隐式 setter 是 setXxx，手写同名同参的函数会撞 JVM 签名）"
+  FAIL=1
+else
+  say "   OK"
+fi
+
 say "== ⑥ 路由分发有没有漏模块 =="
 DETAIL="$SRC/com/nanux/ui/modules/ModuleDetailScreen.kt"
 if [ -f "$DETAIL" ]; then

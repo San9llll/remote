@@ -134,6 +134,33 @@ object FluidCloud {
         }.getOrDefault(builder)
     }
 
+    /**
+     * 发一条测试通知 —— 设置页那个按钮用。
+     *
+     * 存在的意义：流体云"没显示"的时候，分不清是**代码没跑**还是**系统不认**。
+     * 点一下这个，立刻发一条出去：
+     *   - 能看到 → 说明字段和渠道都对，之前是别的地方没触发
+     *   - 看不到 → 那就是系统没给抬（可能要白名单），跟代码无关
+     */
+    fun sendTest(ctx: Context) {
+        // 测试不受开关限制，不然关着开关就没法验了
+        val save = enabled
+        enabled = true
+        notifyFocus(ctx, 0x4F50, "Nakour 测试", "能看见的话说明字段和渠道都对")
+        enabled = save
+    }
+
+    /** 给设置页显示的一句诊断 */
+    fun diagnose(ctx: Context): String {
+        init(ctx)
+        val sys = systemLabel()
+        return when {
+            sys.isBlank() -> "这台机器不是小米 / ColorOS，系统不认这套字段"
+            !enabled -> "开关没开"
+            else -> "系统是 " + sys + "，字段已带上；点「测试一下」看能不能抬上去"
+        }
+    }
+
     /** 单独发一条焦点通知（用于"任务跑完了"这种一次性提醒） */
     fun notifyFocus(ctx: Context, id: Int, title: String, content: String) {
         init(ctx)

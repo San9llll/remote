@@ -48,18 +48,17 @@ object DangerGuard {
             consequence = "系统无法启动、所有照片和聊天记录丢失、" +
                 "应用密钥与锁屏密码异常，严重时直接变砖。",
             regexes = listOf(
-                // ⚠️ 这里**故意放宽**：只要在删东西就问，不强求带 -f/-r。
-                // 之前只认 `rm -rf` 这类，结果 AI 用普通 `rm` 删文件时完全不拦 ——
-                // 用户报"拦截没生效"就是这么来的。
-                """\brm\s+""",
-                """\brmdir\s+""",
-                """\bshred\s+""",
-                """\bunlink\s+""",
-                // 移动/覆盖也可能把东西弄没
-                """\bmv\s+[^\n]*\s/(system|vendor|data|sdcard|storage/emulated)\b""",
-                // 清空文件
-                """>\s*/dev/null\s*$""",
-                """truncate\s+-s\s*0""",
+                // 只管"真会出事的 rm"：
+                //   -r 递归（一删一片）  -f 强制（不问直接删）  动系统目录
+                // 单纯的 `rm /sdcard/xxx.log` 不拦 ——
+                // 以前是"只要在删就问"，结果吵得没法用（用户原话：下个东西都要申请）。
+                "[rR]m\\s+-[a-zA-Z]*[rR]",
+                "[rR]m\\s+-[a-zA-Z]*f",
+                "[rR]m\\s+[^\\n]*\\s/(system|vendor|product|data|boot|cache|root)\\b",
+                "\\brmdir\\s+",
+                "\\bshred\\s+",
+                // 清空一个已有文件（> file 会把内容冲掉）
+                "truncate\\s+-s\\s*0",
             ),
         ),
         Category(
@@ -249,8 +248,31 @@ object DangerGuard {
      * `echo x > /system/build.prop`、`sed -i ... /vendor/...` 这类最常见的。
      */
     private val WRITE_VERBS = listOf(
-        "rm ", "rmdir ", "mv ", "cp ", "chmod ", "chown ", "touch ",
-        "mkdir ", "ln ", "truncate ", "dd ", "tee ", "sed -i", "unzip ",
+        "rm ", "rmdir ", "mv ", "cp ", "chmod ", "chown ",
+        "truncate ", "dd ", "tee ", "sed -i",
+        // 注意：**不要**把 install 放进来。
+        // `pkg install` / `apt install` 是装软件，不是动某个文件 ——
+        // 以前放进来过，结果下一堆东西全在弹确认。
+    )
+
+    /**
+     * URL 得先抠掉。
+     *
+     * 不然 `curl -o /sdcard/a.zip https://example.com/files/a.zip` 里
+     * 那个 `//example.com/files/a.zip` 会被 ABS_PATH 当成文件路径 ——
+     * 它当然不在 sdcard 底下，于是每次下载都要弹确认。
+     */
+    private val URL_RE = Regex("[a-zA-Z][a-zA-Z0-9+.\\-]*://\\S+")
+
+    /**
+     * 这些地方虽然不在 sdcard 里，但本来就是给临时文件用的，不算敏感。
+     */
+    private val BENIGN_PREFIX = listOf(
+        "/data/local/tmp",
+        "/tmp",
+        "/dev/null",
+        "/dev/std",
+        "/proc/self",
     )
 
     private val ABS_PATH = Regex("(/[A-Za-z0-9_./\\-]+)")
@@ -262,20 +284,21 @@ object DangerGuard {
         // 得先是在动文件
         if (WRITE_VERBS.none { c.contains(it) } && !c.contains(">")) return null
 
-        val paths = ABS_PATH.findAll(command).map { it.groupValues[1] }
+        // ⚠️ 先把 URL 抠掉，不然下载命令里那条网址的路径会被当成本地路径
+        val cleaned = URL_RE.replace(command, " ")
+
+        val paths = ABS_PATH.findAll(cleaned).map { it.groupValues[1] }
             .filter { it.length > 3 }
+            // 临时目录之类的不算敏感
+            .filterNot { p -> BENIGN_PREFIX.any { p.startsWith(it) } }
             .toList()
         if (paths.isEmpty()) return null
 
         val outside = paths.filter { isOutsideUserArea(it) }
-        // /dev/null 这种别烦人
-        val meaningful = outside.filterNot {
-            it.startsWith("/dev/null") || it.startsWith("/dev/std")
-        }
-        if (meaningful.isEmpty()) return null
+        if (outside.isEmpty()) return null
 
         val cat = CATEGORIES.firstOrNull { it.id == "outside_user_area" } ?: CATEGORIES.first()
-        return Hit(cat, meaningful.first())
+        return Hit(cat, outside.first())
     }
     /** 不管什么工具，统一过一道 */
     fun risk(tool: String, args: JSONObject): Hit? = when (tool) {

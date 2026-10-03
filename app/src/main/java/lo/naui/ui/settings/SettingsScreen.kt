@@ -1,5 +1,9 @@
 package lo.naui.ui.settings
 
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.getValue
 import androidx.compose.foundation.layout.Column
@@ -129,6 +133,28 @@ fun SettingsScreen(
                         else
                             "当前系统不认这套字段，开了也只有普通通知",
                     )
+                }
+                if (lo.naui.sys.FluidCloud.enabled) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp)
+                            .padding(bottom = 8.dp)
+                            .clip(androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
+                            .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.12f))
+                            .clickable { lo.naui.sys.FluidCloud.sendTest(ctx) }
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                    ) {
+                        Column {
+                            Text("测试一下", fontSize = 13.sp, color = MiuixTheme.colorScheme.primary)
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                lo.naui.sys.FluidCloud.diagnose(ctx),
+                                fontSize = 10.5.sp,
+                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            )
+                        }
+                    }
                 }
                 if (floatDenied) {
                     Text(

@@ -1,5 +1,9 @@
 package lo.naui.ui.settings
 
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.clickable
@@ -134,6 +138,9 @@ fun SettingsScreen(
                             "当前系统不认这套字段，开了也只有普通通知",
                     )
                 }
+                // ---- hook 点自动适配（LSPosed）----
+                HookProbeCard()
+
                 if (lo.naui.sys.FluidCloud.enabled) {
                     Box(
                         Modifier
@@ -220,6 +227,190 @@ private fun requestIgnoreBattery(ctx: android.content.Context) {
                     android.net.Uri.parse("package:" + ctx.packageName))
                     .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
             )
+        }
+    }
+}
+
+/**
+ * hook 点自动适配的卡片。
+ *
+ * 这套东西的来龙去脉：
+ *   - 侧边栏是系统的 View，要挂进去只能走 LSPosed
+ *   - 但侧边栏的类名每个系统版本都不一样，靠人逆太累
+ *   - 所以让 Xposed 那边自己扫一遍，把像侧边栏的类挑出来
+ *   - 扫描进度写在 /sdcard/Nakour/hook_probe.json，这边读出来画条
+ *
+ * 所以这个进度是**真的**，不是装样子。
+ */
+@Composable
+private fun HookProbeCard() {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+
+    var state by remember { androidx.compose.runtime.mutableStateOf(lo.naui.sys.ProbeState()) }
+    var status by remember { androidx.compose.runtime.mutableStateOf("") }
+    var picked by remember { androidx.compose.runtime.mutableStateOf<List<String>>(emptyList()) }
+    var alive by remember { androidx.compose.runtime.mutableStateOf(false) }
+
+    // 每 800ms 刷一次进度 —— 扫描时看着条子动，心里有底
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        while (true) {
+            runCatching {
+                val st = lo.naui.sys.HookProbeReader.read()
+                state = st
+                lo.naui.sys.HookProbeReader.cache(st)
+                status = lo.naui.sys.HookProbeReader.status(ctx)
+                picked = lo.naui.sys.HookProbeReader.picked()
+                alive = lo.naui.sys.XposedActive.isActive(ctx)
+            }
+            kotlinx.coroutines.delay(800)
+        }
+    }
+
+    GlassCard(
+        backdrop = null,
+        enterIndex = 4,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp)
+            .padding(bottom = 8.dp),
+    ) {
+        Column(Modifier.fillMaxWidth().padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("挂进系统侧边栏", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                Spacer(Modifier.weight(1f))
+                Box(
+                    Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(
+                            if (alive) MiuixTheme.colorScheme.primary.copy(alpha = 0.16f)
+                            else MiuixTheme.colorScheme.surfaceContainerHigh
+                        )
+                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                ) {
+                    Text(
+                        if (alive) "LSPosed 已生效" else "未检测到",
+                        fontSize = 10.5.sp,
+                        color = if (alive) MiuixTheme.colorScheme.primary
+                        else MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    )
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "走 LSPosed 把自己挂进侧边栏 —— 比悬浮窗更贴系统。" +
+                    "侧边栏的类名每个系统版本都不一样，所以这里是**自动扫**的。",
+                fontSize = 11.sp,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            )
+
+            Spacer(Modifier.height(12.dp))
+
+            // ---- 进度条（真实的）----
+            val barColor = MiuixTheme.colorScheme.primary
+            val trackColor = MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.18f)
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(trackColor),
+            ) {
+                androidx.compose.foundation.Canvas(Modifier.fillMaxWidth().height(4.dp)) {
+                    val w = size.width * state.progress.coerceIn(0f, 1f)
+                    if (w > 0f) {
+                        drawRoundRect(
+                            color = barColor,
+                            topLeft = androidx.compose.ui.geometry.Offset(0f, 0f),
+                            size = androidx.compose.ui.geometry.Size(w, size.height),
+                            cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.height / 2f),
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    state.stage.ifBlank { status },
+                    fontSize = 10.5.sp,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    (state.progress * 100).toInt().toString() + "%",
+                    fontSize = 10.5.sp,
+                    color = if (state.done) MiuixTheme.colorScheme.primary
+                    else MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                )
+            }
+
+            // 挑出来的候选，列前几个
+            if (picked.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+                        .padding(8.dp),
+                ) {
+                    Text("挑出的候选", fontSize = 10.sp, color = MiuixTheme.colorScheme.primary)
+                    Spacer(Modifier.height(4.dp))
+                    picked.take(5).forEach { n ->
+                        Text(
+                            n,
+                            fontSize = 10.sp,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            maxLines = 1,
+                        )
+                    }
+                    if (picked.size > 5) {
+                        Text(
+                            "…还有 " + (picked.size - 5) + " 个",
+                            fontSize = 10.sp,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(50))
+                        .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+                        .clickable {
+                            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                                lo.naui.sys.HookProbeReader.requestRescan()
+                            }
+                        }
+                        .padding(vertical = 10.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("重新适配", fontSize = 12.5.sp)
+                }
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(50))
+                        .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.14f))
+                        .clickable {
+                            runCatching {
+                                ctx.startActivity(
+                                    android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                                        .setData(android.net.Uri.parse("package:" + ctx.packageName))
+                                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                )
+                            }
+                        }
+                        .padding(vertical = 10.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("怎么启用", fontSize = 12.5.sp, color = MiuixTheme.colorScheme.primary)
+                }
+            }
         }
     }
 }

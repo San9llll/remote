@@ -73,6 +73,20 @@ class NakourXposed : IXposedHookLoadPackage {
         }
 
         log("挂上了：$pkg（classLoader=${lpparam.classLoader}）")
+        HookProbe.sayAlive()
+
+        // ---- 自动适配 hook 点 ----
+        // 初次装 / 系统更新之后跑一次，结果写到 sdcard/Nakour/hook_probe.json，
+        // App 那边读它显示进度条。
+        // 单独开线程，别把 SystemUI 的启动卡住。
+        runCatching {
+            Thread {
+                runCatching {
+                    val names = HookProbe.listClassNames(lpparam.classLoader)
+                    HookProbe.adapt(names)
+                }.onFailure { log("适配失败：${it.message}") }
+            }.start()
+        }
 
         if (DUMP_MODE) {
             dumpCandidates(lpparam)

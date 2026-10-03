@@ -1,5 +1,6 @@
 package lo.naui.ui.settings
 
+import lo.naui.ui.theme.BgStyle
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
@@ -351,42 +352,6 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
                 }
             }
 
-            item(key = "presets") {
-                SectionTitle("基准色（" + PresetColors.list.size + " 种）")
-                Card(
-                    Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 8.dp)
-                ) {
-                    Column(Modifier.padding(16.dp)) {
-                        PresetColors.list.chunked(5).forEach { row ->
-                            Row(
-                                Modifier.fillMaxWidth().padding(vertical = 7.dp),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            ) {
-                                row.forEach { (id, name, color) ->
-                                    val on = prefs.presetName == id && !prefs.useCustomSeed
-                                    Column(
-                                        Modifier.weight(1f).clickable { prefs.updatePreset(id) },
-                                        horizontalAlignment = Alignment.CenterHorizontally,
-                                    ) {
-                                        Box(
-                                            Modifier.size(PresetDot).clip(CircleShape).background(Color(color))
-                                        )
-                                        Spacer(Modifier.height(5.dp))
-                                        Text(
-                                            name, fontSize = 10.sp,
-                                            color = if (on) MiuixTheme.colorScheme.primary
-                                            else MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                                            fontWeight = if (on) FontWeight.Bold else FontWeight.Normal,
-                                        )
-                                    }
-                                }
-                                repeat(5 - row.size) { Spacer(Modifier.weight(1f)) }
-                            }
-                        }
-                    }
-                }
-            }
-
             item(key = "dark") {
                 SectionTitle("明暗与密度")
                 SettingsCard(index = 3) {
@@ -418,12 +383,6 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
                         onClick = { dialog = "home" },
                     )
                     ArrowPreference(
-                        title = "导航布局",
-                        summary = prefs.navMode.summary,
-                        startAction = { SettingsIcon(MiuixIcons.Refresh) },
-                        onClick = { dialog = "nav" },
-                    )
-                    ArrowPreference(
                         title = "时钟样式",
                         summary = prefs.clockStyle.summary,
                         startAction = { SettingsIcon(MiuixIcons.Notes) },
@@ -445,8 +404,77 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
             item(key = "background") {
                 SectionTitle("背景")
                 SettingsCard(index = 5) {
-                    ArrowPreference(
-                        title = "主页大图",
+                    // ---- 样式三选一 ----
+                    // 1 / 2 是打包在 assets 里的两套（用户自己挑的图），
+                    // 选了就随机挑一张；自定义才用下面那些自己设的。
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp)) {
+                        Text(
+                            "样式",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            BgStyle.entries.forEach { st ->
+                                val on = prefs.bgStyle == st
+                                Box(
+                                    Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(50))
+                                        .background(
+                                            if (on) MiuixTheme.colorScheme.primary
+                                            else MiuixTheme.colorScheme.surfaceContainerHigh
+                                        )
+                                        .clickable { prefs.updateBgStyle(st) }
+                                        .padding(vertical = 9.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Text(
+                                        st.label,
+                                        fontSize = 12.5.sp,
+                                        fontWeight = if (on) FontWeight.Medium else FontWeight.Normal,
+                                        color = if (on) MiuixTheme.colorScheme.onPrimary
+                                        else MiuixTheme.colorScheme.onSurface,
+                                    )
+                                }
+                            }
+                        }
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            when (prefs.bgStyle) {
+                                BgStyle.Nk -> "样式 1 · 内置 " +
+                                    lo.naui.ui.theme.BuiltinBg.heroAssets(ctx, BgStyle.Nk).size +
+                                    " 张，每次启动随机挑，主页上滑换下一张"
+                                BgStyle.Gc -> "样式 2 · 内置 " +
+                                    lo.naui.ui.theme.BuiltinBg.heroAssets(ctx, BgStyle.Gc).size +
+                                    " 张，权限弹窗也有专属背景"
+                                BgStyle.Custom -> "自定义 · 用下面自己选的那些图"
+                            },
+                            fontSize = 10.5.sp,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        )
+                    }
+
+                    // ---- 自定义才展开下面这些 ----
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = prefs.bgStyle == BgStyle.Custom,
+                        enter = androidx.compose.animation.expandVertically(
+                            androidx.compose.animation.core.tween(280)
+                        ) + androidx.compose.animation.fadeIn(
+                            androidx.compose.animation.core.tween(220)
+                        ),
+                        exit = androidx.compose.animation.shrinkVertically(
+                            androidx.compose.animation.core.tween(220)
+                        ) + androidx.compose.animation.fadeOut(
+                            androidx.compose.animation.core.tween(140)
+                        ),
+                    ) {
+                        Column(Modifier.fillMaxWidth()) {
+                            ArrowPreference(
+                                title = "主页大图",
                         summary = when {
                             prefs.heroImages.isEmpty() -> "还没选（用主题渐变兜底）· 可以一次挑多张"
                             prefs.heroImages.size == 1 -> "1 张 · 每次启动随机挑，点一下再加几张"
@@ -459,13 +487,16 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
                         ArrowPreference(
                             title = "换一张看看",
                             summary = "不用等下次启动，现在就换",
-                            onClick = { prefs.nextHero() },
+                            onClick = { prefs.nextHero(ctx) },
                         )
                         ArrowPreference(
                             title = "清除主页大图",
                             summary = "全部清掉，回到主题渐变兜底",
                             onClick = { prefs.clearHeroImages() },
                         )
+                    }
+
+                        }
                     }
 
                     ArrowPreference(
@@ -542,13 +573,6 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
             options = HomeLayout.entries.map { Option(it.id, it.label, it.summary) },
             currentId = prefs.homeLayout.id,
             onPick = { id -> HomeLayout.entries.firstOrNull { it.id == id }?.let { prefs.updateHomeLayout(it) } },
-            onDismiss = { dialog = null },
-        )
-        "nav" -> OptionDialog(
-            show = true, title = "导航布局",
-            options = NavMode.entries.map { Option(it.id, it.label, it.summary) },
-            currentId = prefs.navMode.id,
-            onPick = { id -> NavMode.entries.firstOrNull { it.id == id }?.let { prefs.updateNavMode(it) } },
             onDismiss = { dialog = null },
         )
         "clock" -> OptionDialog(

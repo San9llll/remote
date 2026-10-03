@@ -62,13 +62,7 @@ fun RailSettingsScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
                 title = "信息",
                 summary = "电量下面那块信息，上下各一条细线标出范围",
             )
-            IndicatorSwitchPreference(
-                checked = prefs.railShowOverview,
-                onCheckedChange = { prefs.updateRailShowOverview(it) },
-                title = "概览入口",
-                summary = "关掉之后侧栏里就不出现「概览」那一项",
-            )
-        }
+                    }
 
         SectionTitle("信息内容（最多 " + INFO_LINE_COUNT + " 行）")
         RailCard(index = 1) {

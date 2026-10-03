@@ -65,11 +65,21 @@ fun HomeScreen(
     var refreshing by remember { mutableStateOf(false) }
     // 拉一次就把设备/权限信息重新问一遍，这样"下拉刷新"是真有东西刷新的
     var deviceLine by remember { mutableStateOf("") }
-    var privLine by remember { mutableStateOf("") }
+    var lspLine by remember { mutableStateOf("") }
 
     suspend fun reload() {
-        deviceLine = Build.MANUFACTURER + " " + Build.MODEL + " · Android " + Build.VERSION.RELEASE
-        privLine = runCatching { Privilege.level(ctx).label }.getOrDefault("普通用户")
+        deviceLine = Build.MANUFACTURER + " " + Build.MODEL
+        // 右边那栏显示 LSPosed 的状态 —— 用户要的"LSP 权限"
+        lspLine = when {
+            lo.naui.sys.XposedActive.isActive(ctx) -> {
+                val seen = lo.naui.sys.XposedActive.lastSeen()
+                if (seen.isBlank()) "已生效" else "已生效 · " + seen
+            }
+            runCatching { Privilege.level(ctx) }.getOrDefault(lo.naui.sys.PrivLevel.Normal) !=
+                lo.naui.sys.PrivLevel.Normal -> runCatching { Privilege.level(ctx).label }
+                .getOrDefault("未生效")
+            else -> "未生效"
+        }
         delay(320)
     }
 
@@ -110,7 +120,7 @@ fun HomeScreen(
                 // 手势只挂在 hero 上，不跟下面那个下拉刷新打架。
                 SceneHero(
                     wallpaper = wallpaper,
-                    title = "Nakour",
+                    title = "",
                     subtitle = "",
                     badge = null,
                     scrollState = scrollState,
@@ -125,7 +135,7 @@ fun HomeScreen(
                                 onDragStart = { dy = 0f },
                                 onDragEnd = {
                                     // 往上滑够了就换 —— 阈值小一点，手感轻
-                                    if (dy < -60f) prefs?.nextHero()
+                                    if (dy < -60f) prefs?.nextHero(ctx)
                                 },
                             ) { _, drag -> dy += drag }
                         },
@@ -145,8 +155,8 @@ fun HomeScreen(
                 SceneStatusStrip(
                     leftTitle = "设备",
                     leftValue = deviceLine.ifBlank { Build.MANUFACTURER + " " + Build.MODEL },
-                    rightTitle = "权限",
-                    rightValue = privLine.ifBlank { "—" },
+                    rightTitle = "LSP 权限",
+                    rightValue = lspLine.ifBlank { "—" },
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 22.dp)

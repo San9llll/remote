@@ -24,8 +24,8 @@ android {
         // 那 termux 的二进制（全在 $PREFIX/bin 下）就一个都跑不起来。
         // termux 官方也是这么绕的，代价是上不了 Play。
         targetSdk = 28
-        versionCode = 57
-        versionName = "0.57.0"
+        versionCode = 58
+        versionName = "0.58.0"
 
         // 只打 arm64-v8a。
         // 一来机器就是 arm64，多带别的 ABI 纯属白占体积；

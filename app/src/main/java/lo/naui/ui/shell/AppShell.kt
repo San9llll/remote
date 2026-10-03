@@ -141,11 +141,23 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
     // 内容页背景图（模块 / 概览 / 设置铺的那张）—— 从主题页选的本地图读
     var pageBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
 
-    LaunchedEffect(prefs.homeImage) {
-        // 取色要的是 android.graphics.Bitmap，所以原图先留着，画的时候再转 ImageBitmap
-        val bmp = loadBitmap(prefs.homeImage)
+    // 壁纸：1 / 2 走 assets 里那两套内置图（每次启动随机一张），自定义走用户选的
+    LaunchedEffect(prefs.bgStyle, prefs.homeImage, prefs.builtinHero) {
+        val bmp = if (prefs.bgStyle == lo.naui.ui.theme.BgStyle.Custom) {
+            loadBitmap(prefs.homeImage)
+        } else {
+            // 内置那套：没挑过就先随机一张记下来
+            var path = prefs.builtinHero
+            if (path.isBlank()) {
+                path = lo.naui.ui.theme.BuiltinBg.randomHero(ctx, prefs.bgStyle).orEmpty()
+                if (path.isNotBlank()) prefs.setBuiltinHero(path)
+            }
+            lo.naui.ui.theme.BuiltinBg.load(ctx, path)
+        }
+
         if (bmp != null) {
             wallpaper = bmp.asImageBitmap()
+            // 取色要的是 android.graphics.Bitmap，所以原图先留着
             val (seed, isLight) = lo.naui.ui.theme.dominantSeed(bmp)
             prefs.saveWallpaperSeed(seed, isLight)
         } else {

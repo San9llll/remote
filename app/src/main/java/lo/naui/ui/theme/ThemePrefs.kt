@@ -286,6 +286,31 @@ class ThemePrefs(context: Context) {
     /** 兼容老字段：外面读 homeImage 就是读"当前这张" */
     var homeImage by mutableStateOf(sp.getString("home_image", "") ?: "")
 
+    /**
+     * 背景风格。
+     *
+     * **1（nk）/ 2（gc）是打包在 assets 里自带的两套**，选了就随机挑一张；
+     * 自定义才用用户自己挑的图。
+     */
+    var bgStyle by mutableStateOf(BgStyle.of(sp.getString("bg_style", null)))
+
+    fun updateBgStyle(v: BgStyle) {
+        bgStyle = v
+        sp.edit().putString("bg_style", v.id).apply()
+        // 换风格就把内置那张清掉，让它重新随机
+        builtinHero = ""
+        sp.edit().putString("builtin_hero", "").apply()
+    }
+
+    /** 内置背景下这次随机到的那张 */
+    var builtinHero by mutableStateOf(sp.getString("builtin_hero", "") ?: "")
+        private set
+
+    fun setBuiltinHero(path: String) {
+        builtinHero = path
+        sp.edit().putString("builtin_hero", path).apply()
+    }
+
     /** 把列表落盘 */
     private fun persistHero() {
         sp.edit().putString("hero_images", heroImages.joinToString("\n")).apply()
@@ -319,8 +344,17 @@ class ThemePrefs(context: Context) {
         }
     }
 
-    /** 换下一张（上滑的时候调）—— 单张的话就重摇一次，等于没换 */
-    fun nextHero() {
+    /**
+     * 换下一张（主页上滑调它）。
+     *
+     * - 1 / 2：从内置那套里重摇一张（assets 里是随机，没法顺序走）
+     * - 自定义：按顺序走一遍用户选的那些
+     */
+    fun nextHero(ctx: android.content.Context) {
+        if (bgStyle != BgStyle.Custom) {
+            BuiltinBg.randomHero(ctx, bgStyle)?.let { setBuiltinHero(it) }
+            return
+        }
         if (heroImages.size <= 1) {
             rollHero()
             return
@@ -447,7 +481,7 @@ class ThemePrefs(context: Context) {
     /* ---------- 玻璃参数（液态玻璃那几个旋钮）---------- */
 
     /** 模糊半径，dp */
-    var glassBlur by mutableStateOf(sp.getFloat("glass_blur", 20f))
+    var glassBlur by mutableStateOf(sp.getFloat("glass_blur", 0f))
 
     fun updateGlassBlur(v: Float) {
         glassBlur = v.coerceIn(0f, 40f)
@@ -455,7 +489,7 @@ class ThemePrefs(context: Context) {
     }
 
     /** 折射深度（lens），dp */
-    var glassLens by mutableStateOf(sp.getFloat("glass_lens", 12f))
+    var glassLens by mutableStateOf(sp.getFloat("glass_lens", 20f))
 
     fun updateGlassLens(v: Float) {
         glassLens = v.coerceIn(0f, 40f)
@@ -463,7 +497,7 @@ class ThemePrefs(context: Context) {
     }
 
     /** 卡片面板色的不透明度 */
-    var glassAlpha by mutableStateOf(sp.getFloat("glass_alpha", 0.58f))
+    var glassAlpha by mutableStateOf(sp.getFloat("glass_alpha", 0.2f))
 
     fun updateGlassAlpha(v: Float) {
         glassAlpha = v.coerceIn(0.10f, 0.95f)
@@ -474,7 +508,7 @@ class ThemePrefs(context: Context) {
      * 弹窗底下那层的暗度（0.1~0.9）。
      * 用户要"弹窗底层背景可修改"，就是它。
      */
-    var dialogScrim by mutableStateOf(sp.getFloat("dialog_scrim", 0.55f))
+    var dialogScrim by mutableStateOf(sp.getFloat("dialog_scrim", 0.5f))
 
     fun updateDialogScrim(v: Float) {
         dialogScrim = v.coerceIn(0.1f, 0.9f)

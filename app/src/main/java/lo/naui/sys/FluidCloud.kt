@@ -75,7 +75,9 @@ object FluidCloud {
             val cls = Class.forName("android.os.SystemProperties")
             val get = cls.getMethod("get", String::class.java)
             val v = get.invoke(null, "ro.build.version.opporom") as? String
-            !v.isNullOrBlank()
+            // ⚠️ 必须写 return@runCatching —— Kotlin 的换行不算语句结束，
+            // 直接跟一个 `!v...` 会被当成 `as? String !v` 一起解析，语法错
+            return@runCatching !v.isNullOrBlank()
         }.getOrDefault(false)
         brandHit || propHit
     }.getOrDefault(false)

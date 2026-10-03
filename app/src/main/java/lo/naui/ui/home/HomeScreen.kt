@@ -1,5 +1,7 @@
 package lo.naui.ui.home
 
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import android.os.Build
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -57,6 +59,8 @@ fun HomeScreen(
 ) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
+    // 上滑换大图要用
+    val prefs = lo.naui.ui.theme.Prefs.current
 
     var refreshing by remember { mutableStateOf(false) }
     // 拉一次就把设备/权限信息重新问一遍，这样"下拉刷新"是真有东西刷新的
@@ -100,6 +104,10 @@ fun HomeScreen(
                 Spacer(Modifier.height(12.dp))
 
                 // hero 卡：大字是 Nakour（原来这儿放的是 Late night）
+                // hero 卡：大字是 Nakour（原来这儿放的是 Late night）
+                //
+                // 上滑换一张大图 —— 用户要的"上滑刷新"。
+                // 手势只挂在 hero 上，不跟下面那个下拉刷新打架。
                 SceneHero(
                     wallpaper = wallpaper,
                     title = "Nakour",
@@ -110,7 +118,17 @@ fun HomeScreen(
                     modifier = Modifier
                         .padding(horizontal = 14.dp)
                         .fillMaxWidth()
-                        .height(layout.heroHeight),
+                        .height(layout.heroHeight)
+                        .pointerInput(Unit) {
+                            var dy = 0f
+                            detectVerticalDragGestures(
+                                onDragStart = { dy = 0f },
+                                onDragEnd = {
+                                    // 往上滑够了就换 —— 阈值小一点，手感轻
+                                    if (dy < -60f) prefs?.nextHero()
+                                },
+                            ) { _, drag -> dy += drag }
+                        },
                 )
 
                 // 问候：上面小字改成时间词（原来是 Nakour），下面是日语 + 中文翻译

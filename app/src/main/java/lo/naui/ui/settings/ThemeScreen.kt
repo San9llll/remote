@@ -124,18 +124,22 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
 
 
     var dialog by remember { mutableStateOf<String?>(null) }
-    // 主页大图：系统选择器挑一张 → 复制进 App 私有目录（本地图，不走服务器）
+    // 主页大图：可以一次挑**多张**，都复制进 App 私有目录（本地图，不走服务器）。
+    // 启动时随机挑一张显示，主页上滑换下一张。
     val imagePicker = androidx.activity.compose.rememberLauncherForActivityResult(
-        contract = androidx.activity.result.contract.ActivityResultContracts.GetContent(),
-    ) { uri ->
-        if (uri != null) {
-            runCatching {
-                val target = java.io.File(ctx.filesDir, "home_image.jpg")
+        contract = androidx.activity.result.contract.ActivityResultContracts.GetMultipleContents(),
+    ) { uris ->
+        if (uris.isNullOrEmpty()) return@rememberLauncherForActivityResult
+        runCatching {
+            val saved = mutableListOf<String>()
+            uris.forEachIndexed { i, uri ->
+                val target = java.io.File(ctx.filesDir, "hero_" + System.currentTimeMillis() + "_" + i + ".jpg")
                 ctx.contentResolver.openInputStream(uri)?.use { input ->
                     target.outputStream().use { output -> input.copyTo(output) }
                 }
-                prefs.updateHomeImage(target.absolutePath)
+                saved += target.absolutePath
             }
+            prefs.addHeroImages(saved)
         }
     }
     // 设置页背景（设置及其所有子页用）
@@ -443,19 +447,24 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
                 SettingsCard(index = 5) {
                     ArrowPreference(
                         title = "主页大图",
-                        summary = if (prefs.homeImage.isBlank()) {
-                            "还没选（用主题渐变兜底）"
-                        } else {
-                            "已设置 · 点一下换一张"
+                        summary = when {
+                            prefs.heroImages.isEmpty() -> "还没选（用主题渐变兜底）· 可以一次挑多张"
+                            prefs.heroImages.size == 1 -> "1 张 · 每次启动随机挑，点一下再加几张"
+                            else -> "已选 " + prefs.heroImages.size + " 张 · 每次启动随机挑一张，主页上滑换下一张"
                         },
                         startAction = { SettingsIcon(MiuixIcons.Photos) },
                         onClick = { imagePicker.launch("image/*") },
                     )
-                    if (prefs.homeImage.isNotBlank()) {
+                    if (prefs.heroImages.isNotEmpty()) {
+                        ArrowPreference(
+                            title = "换一张看看",
+                            summary = "不用等下次启动，现在就换",
+                            onClick = { prefs.nextHero() },
+                        )
                         ArrowPreference(
                             title = "清除主页大图",
-                            summary = "回到主题渐变兜底",
-                            onClick = { prefs.updateHomeImage("") },
+                            summary = "全部清掉，回到主题渐变兜底",
+                            onClick = { prefs.clearHeroImages() },
                         )
                     }
 

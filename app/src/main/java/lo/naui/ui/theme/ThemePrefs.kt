@@ -165,6 +165,7 @@ object Prefs {
 class ThemePrefs(context: Context) {
     private val sp = context.getSharedPreferences("nakour_theme", Context.MODE_PRIVATE)
 
+
     init {
         WallpaperColorTheme.load(sp)
     }
@@ -262,10 +263,96 @@ class ThemePrefs(context: Context) {
     }
 
     /** 主图（本地图片的绝对路径，空 = 用兜底渐变） */
+    /**
+     * 主页大图，**可以放好几张**。
+     *
+     * 存成一个换行分隔的字符串。启动时随机挑一张显示，
+     * 主页上滑可以换下一张。
+     */
+    var heroImages by mutableStateOf(
+        (sp.getString("hero_images", "") ?: "")
+            .split('\n').filter { it.isNotBlank() }
+    )
+        private set
+
+    /**
+     * 这次显示的是哪张。
+     *
+     * 启动时从 [heroImages] 里随机挑 —— 每次开 App 看到的大图都不一样。
+     */
+    var currentHero by mutableStateOf("")
+        private set
+
+    /** 兼容老字段：外面读 homeImage 就是读"当前这张" */
     var homeImage by mutableStateOf(sp.getString("home_image", "") ?: "")
+
+    /** 把列表落盘 */
+    private fun persistHero() {
+        sp.edit().putString("hero_images", heroImages.joinToString("\n")).apply()
+    }
+
+    /** 追加几张（多选的时候用） */
+    fun addHeroImages(paths: List<String>) {
+        if (paths.isEmpty()) return
+        val next = (heroImages + paths).distinct()
+        heroImages = next
+        persistHero()
+        if (currentHero.isBlank()) currentHero = next.random()
+        homeImage = currentHero
+    }
+
+    /** 清空 */
+    fun clearHeroImages() {
+        heroImages = emptyList()
+        currentHero = ""
+        homeImage = ""
+        persistHero()
+        sp.edit().putString("home_image", "").apply()
+    }
+
+    /** 随机挑一张（启动时调） */
+    fun rollHero() {
+        val pick = heroImages.randomOrNull()
+        if (pick != null) {
+            currentHero = pick
+            homeImage = pick
+        }
+    }
+
+    /** 换下一张（上滑的时候调）—— 单张的话就重摇一次，等于没换 */
+    fun nextHero() {
+        if (heroImages.size <= 1) {
+            rollHero()
+            return
+        }
+        val i = heroImages.indexOf(currentHero)
+        val next = heroImages[(i + 1).mod(heroImages.size)]
+        currentHero = next
+        homeImage = next
+    }
+
+    /**
+     * 启动时随机挑一张。
+     *
+     * ⚠️ 这个 init **只能放在属性声明后面** —— Kotlin 按声明顺序初始化，
+     * 写在前面的话 `currentHero = pick` 会被后面那句
+     * `var currentHero by mutableStateOf("")` 覆盖掉，等于白干。
+     */
+    init {
+        runCatching {
+            val list = (sp.getString("hero_images", "") ?: "")
+                .split('\n').filter { it.isNotBlank() }
+            if (list.isNotEmpty()) {
+                val pick = list.random()
+                currentHero = pick
+                homeImage = pick
+            }
+        }
+    }
 
     fun updateHomeImage(path: String) {
         homeImage = path
+        if (path.isNotBlank()) currentHero = path
         sp.edit().putString("home_image", path).apply()
     }
 

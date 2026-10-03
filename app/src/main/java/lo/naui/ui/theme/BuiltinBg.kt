@@ -58,12 +58,20 @@ object BuiltinBg {
     }
 
     /** 某套风格的大图路径（assets 相对路径） */
-    fun heroAssets(ctx: Context, style: BgStyle): List<String> =
-        list(ctx, heroDir(style)).map { "$heroDir(style)/$it" }
+    fun heroAssets(ctx: Context, style: BgStyle): List<String> {
+        val dir = heroDir(style)
+        if (dir.isBlank()) return emptyList()
+        // ⚠️ 必须写成 ${dir} —— 裸的 "$dir" 也行，但 "$heroDir(style)" 是**不会调用函数**的，
+        // Kotlin 只把它当变量名，编译期直接报 "Function invocation expected"
+        return list(ctx, dir).map { "$dir/$it" }
+    }
 
     /** 某套风格的权限弹窗背景（可能为空） */
-    fun dialogAssets(ctx: Context, style: BgStyle): List<String> =
-        list(ctx, dialogDir(style)).map { "$dialogDir(style)/$it" }
+    fun dialogAssets(ctx: Context, style: BgStyle): List<String> {
+        val dir = dialogDir(style)
+        if (dir.isBlank()) return emptyList()
+        return list(ctx, dir).map { "$dir/$it" }
+    }
 
     /** 随机挑一张大图 */
     fun randomHero(ctx: Context, style: BgStyle): String? =

@@ -137,6 +137,8 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
 
     // 主图在 shell 层加载一次：导轨拿它做背景，首页拿它画大图。
     // 图是**本地**的（在主题页里自选），不从服务器拉。
+    // 内置背景要从 assets 读，得有个 context
+    val ctx = androidx.compose.ui.platform.LocalContext.current
     var wallpaper by remember { mutableStateOf<ImageBitmap?>(null) }
     // 内容页背景图（模块 / 概览 / 设置铺的那张）—— 从主题页选的本地图读
     var pageBitmap by remember { mutableStateOf<ImageBitmap?>(null) }

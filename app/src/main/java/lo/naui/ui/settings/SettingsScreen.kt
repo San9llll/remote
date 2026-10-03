@@ -1,5 +1,6 @@
 package lo.naui.ui.settings
 
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -245,6 +246,7 @@ private fun requestIgnoreBattery(ctx: android.content.Context) {
 @Composable
 private fun HookProbeCard() {
     val ctx = androidx.compose.ui.platform.LocalContext.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
 
     var state by remember { androidx.compose.runtime.mutableStateOf(lo.naui.sys.ProbeState()) }
     var status by remember { androidx.compose.runtime.mutableStateOf("") }
@@ -382,9 +384,7 @@ private fun HookProbeCard() {
                         .clip(RoundedCornerShape(50))
                         .background(MiuixTheme.colorScheme.surfaceContainerHigh)
                         .clickable {
-                            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-                                lo.naui.sys.HookProbeReader.requestRescan()
-                            }
+                            scope.launch { lo.naui.sys.HookProbeReader.requestRescan() }
                         }
                         .padding(vertical = 10.dp),
                     contentAlignment = Alignment.Center,

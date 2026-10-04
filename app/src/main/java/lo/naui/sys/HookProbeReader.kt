@@ -24,14 +24,57 @@ object XposedActive {
 
     fun isActive(ctx: Context): Boolean = runCatching { ALIVE.exists() }.getOrDefault(false)
 
+    /** 那个文件是 `时间戳|API版本|框架名`，切一下 */
+    private fun parts(): List<String> = runCatching {
+        if (!ALIVE.exists()) emptyList()
+        else ALIVE.readText().trim().split("|")
+    }.getOrDefault(emptyList())
+
     /** 它上次报活是什么时候 */
     fun lastSeen(): String = runCatching {
-        val f = ALIVE
-        if (!f.exists()) return@runCatching ""
-        val t = f.readText().trim().toLongOrNull() ?: return@runCatching ""
+        val t = parts().getOrNull(0)?.toLongOrNull() ?: return@runCatching ""
         java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault())
             .format(java.util.Date(t))
     }.getOrDefault("")
+
+    /** Xposed API 版本（LSPosed 一般给 82 / 93） */
+    fun apiVersion(): Int = parts().getOrNull(1)?.toIntOrNull() ?: 0
+
+    /** 框架名（LSPosed / EdXposed / Xposed） */
+    fun framework(): String = parts().getOrNull(2)?.takeIf { it.isNotBlank() } ?: ""
+
+    /**
+     * LSPosed 管理器的版本。
+     *
+     * 框架本身没提供"查我版本号"的 API，但管理器（`org.lsposed.manager`）
+     * 跟框架是一起发布的，版本号对得上 —— 所以从那儿读。
+     * 没装管理器（比如只刷了框架）就拿不到，返回空串。
+     */
+    fun managerVersion(ctx: Context): String = runCatching {
+        @Suppress("DEPRECATION")
+        val info = ctx.packageManager.getPackageInfo("org.lsposed.manager", 0)
+        info.versionName ?: ""
+    }.getOrDefault("")
+
+    /**
+     * 主页那栏要显示的那句话。
+     *
+     * 例：`LSPosed 1.9.2 · API 93`
+     */
+    fun summary(ctx: Context): String {
+        if (!isActive(ctx)) return "未生效"
+        val fw = framework().ifBlank { "Xposed" }
+        val api = apiVersion()
+        val mgr = managerVersion(ctx)
+        return buildString {
+            append(fw)
+            if (mgr.isNotBlank()) append(' ').append(mgr)
+            if (api > 0) {
+                if (isNotEmpty()) append(" · ")
+                append("API ").append(api)
+            }
+        }
+    }
 }
 
 /** 适配进度的一个快照 */

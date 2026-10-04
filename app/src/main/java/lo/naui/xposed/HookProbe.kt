@@ -70,12 +70,53 @@ object HookProbe {
         "com.android.systemui.qs",
     )
 
-    /** 报个活 —— App 靠这个文件判断模块到底有没有被框架加载 */
+    /**
+     * 报个活 —— App 靠这个文件判断模块到底有没有被框架加载。
+     *
+     * 顺带把**框架信息**也写进去，主页那栏要显示：
+     *   · `XposedBridge.getXposedVersion()` → API 版本（LSPosed 一般给 82 或 93）
+     *   · 框架名（LSPosed / EdXposed / 原版）—— 从 XposedBridge 的实现类反推
+     *
+     * 格式：时间戳|API版本|框架名
+     */
     fun sayAlive() {
         runCatching {
             if (!DIR.exists()) DIR.mkdirs()
-            File(DIR, "xposed_alive.txt").writeText(System.currentTimeMillis().toString())
+
+            val api = runCatching { XposedBridge.getXposedVersion() }.getOrDefault(0)
+            val name = frameworkName()
+
+            File(DIR, "xposed_alive.txt").writeText(
+                System.currentTimeMillis().toString() + "|" + api + "|" + name
+            )
+            log("报活：API=$api 框架=$name")
         }
+    }
+
+    /**
+     * 猜是哪个框架。
+     *
+     * XposedBridge 那个类各家都用自己的实现，从它的**类加载器拿到的来源**
+     * 或者几个特征类名就能看出是哪家：
+     *   · LSPosed   —— 有 org.lsposed.* 的类
+     *   · EdXposed  —— 有 de.robv.android.xposed.XposedBridge 但包名不同
+     *   · 原版       —— 什么都没有
+     */
+    private fun frameworkName(): String {
+        val probes = listOf(
+            "org.lsposed.lspd.core.Main" to "LSPosed",
+            "org.lsposed.manager.App" to "LSPosed",
+            "de.robv.android.xposed.XposedBridge" to "Xposed",
+            "org.meowcat.edxposed.manager.XposedApp" to "EdXposed",
+        )
+        probes.forEach { (cls, name) ->
+            val ok = runCatching {
+                Class.forName(cls, false, HookProbe::class.java.classLoader)
+                true
+            }.getOrDefault(false)
+            if (ok) return name
+        }
+        return "Xposed"
     }
 
     /** 现阶段的系统指纹 */

@@ -73,17 +73,8 @@ fun HomeScreen(
         if (changeHero) prefs?.nextHero(ctx)
         topPriv = runCatching { Privilege.topInfo(ctx) }.getOrNull()
         deviceLine = Build.MANUFACTURER + " " + Build.MODEL
-        // 右边那栏显示 LSPosed 的状态 —— 用户要的"LSP 权限"
-        lspLine = when {
-            lo.naui.sys.XposedActive.isActive(ctx) -> {
-                val seen = lo.naui.sys.XposedActive.lastSeen()
-                if (seen.isBlank()) "已生效" else "已生效 · " + seen
-            }
-            runCatching { Privilege.level(ctx) }.getOrDefault(lo.naui.sys.PrivLevel.Normal) !=
-                lo.naui.sys.PrivLevel.Normal -> runCatching { Privilege.level(ctx).label }
-                .getOrDefault("未生效")
-            else -> "未生效"
-        }
+        // 右边那栏：LSPosed 的框架版本 + API 版本
+        lspLine = lo.naui.sys.XposedActive.summary(ctx)
         delay(320)
     }
 

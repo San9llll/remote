@@ -175,14 +175,25 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
         }
     }
 
-    LaunchedEffect(prefs.contentImage) {
-        pageBitmap = loadBitmap(prefs.contentImage)?.asImageBitmap()
+    LaunchedEffect(prefs.contentImage, prefs.bgStyle) {
+        pageBitmap = if (prefs.bgStyle == lo.naui.ui.theme.BgStyle.Custom) {
+            loadBitmap(prefs.contentImage)?.asImageBitmap()
+        } else {
+            // 内置样式：用压缩包里给的那张
+            val path = lo.naui.ui.theme.BuiltinBg.pageAsset(ctx, prefs.bgStyle)
+            lo.naui.ui.theme.BuiltinBg.load(ctx, path)?.asImageBitmap()
+        }
     }
 
     // 设置页（含它所有子页）单独的底图
     var settingsBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
-    LaunchedEffect(prefs.settingsImage) {
-        settingsBitmap = loadBitmap(prefs.settingsImage)?.asImageBitmap()
+    LaunchedEffect(prefs.settingsImage, prefs.bgStyle) {
+        settingsBitmap = if (prefs.bgStyle == lo.naui.ui.theme.BgStyle.Custom) {
+            loadBitmap(prefs.settingsImage)?.asImageBitmap()
+        } else {
+            val path = lo.naui.ui.theme.BuiltinBg.settingsAsset(prefs.bgStyle)
+            lo.naui.ui.theme.BuiltinBg.load(ctx, path)?.asImageBitmap()
+        }
     }
 
     // Agent 消息里点了文件路径 → 切到文件管理（目录已经被 UI 那边写好了）

@@ -73,6 +73,30 @@ object BuiltinBg {
         return list(ctx, dir).map { "$dir/$it" }
     }
 
+    /**
+     * 内容页背景。
+     *
+     * 压缩包里每个样式一张（`bg/page/nk`、`bg/page/gc`）。
+     * 这是"功能 / 概览 / 设置"那几页铺的底。
+     */
+    fun pageAsset(ctx: Context, style: BgStyle): String? {
+        if (style == BgStyle.Custom) return null
+        val dir = "bg/page/" + style.id
+        return list(ctx, dir).firstOrNull()?.let { "$dir/$it" }
+    }
+
+    /**
+     * 设置页背景。
+     *
+     * 压缩包根目录给了两张，按样式名分（`bg/settings/nk.png` / `gc.png`）。
+     * 设置页和它所有子页都用它。
+     */
+    fun settingsAsset(style: BgStyle): String? = when (style) {
+        BgStyle.Nk -> "bg/settings/nk.png"
+        BgStyle.Gc -> "bg/settings/gc.png"
+        BgStyle.Custom -> null
+    }
+
     /** 随机挑一张大图 */
     fun randomHero(ctx: Context, style: BgStyle): String? =
         heroAssets(ctx, style).randomOrNull()

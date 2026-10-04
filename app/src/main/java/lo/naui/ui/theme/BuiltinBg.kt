@@ -105,12 +105,61 @@ object BuiltinBg {
     fun randomDialog(ctx: Context, style: BgStyle): String? =
         dialogAssets(ctx, style).randomOrNull()
 
-    /** 从 assets 读一张图 */
+    /**
+     * 已解码的图缓存。
+     *
+     * 为什么要有：一张一百多 KB 的 PNG 解出来是好几 MB，每次切都现解
+     * 会明显顿一下（用户反馈"切换时太卡"）。
+     * 而且这些图是**打包死的**，内容永远不变，缓存起来完全安全。
+     */
+    private val cache = HashMap<String, Bitmap>()
+
+    /** 从 assets 读一张图（带缓存） */
     fun load(ctx: Context, assetPath: String?): Bitmap? {
         if (assetPath.isNullOrBlank()) return null
-        return runCatching {
+        cache[assetPath]?.let { return it }
+        val bmp = runCatching {
             ctx.assets.open(assetPath).use { BitmapFactory.decodeStream(it) }
         }.getOrNull()
+        if (bmp != null) cache[assetPath] = bmp
+        return bmp
+    }
+
+    /**
+     * 预热。
+     *
+     * 用户要求"打开应用时就将这些准备就绪" —— 所以启动时把当前样式的
+     * 那几张（大图 / 内容页 / 设置页 / 权限弹窗）先解好放缓存里，
+     * 之后切换就是直接拿，没有解码那一下。
+     *
+     * 只热当前样式：1 / 2 两套全热的话要占十几 MB 内存，不值当。
+     */
+    fun preload(ctx: Context, style: BgStyle) {
+        if (style == BgStyle.Custom) return
+        runCatching {
+            // 大图先来一张（这张是界面上最显眼的）
+            randomHero(ctx, style)?.let { load(ctx, it) }
+            // 内容页 / 设置页
+            pageAsset(ctx, style)?.let { load(ctx, it) }
+            settingsAsset(style)?.let { load(ctx, it) }
+            // 权限弹窗的背景（只有样式 2 有）
+            randomDialog(ctx, style)?.let { load(ctx, it) }
+        }
+    }
+
+    /** 清缓存（换样式的时候把不要的丢掉，省内存） */
+    fun trim(keepStyle: BgStyle, ctx: Context) {
+        runCatching {
+            val keepPrefixes = listOf(
+                "bg/" + keepStyle.id + "/",
+                "bg/page/" + keepStyle.id + "/",
+                "bg/" + keepStyle.id + "_dialog/",
+                "bg/settings/" + keepStyle.id,
+                "bg/btn_" + keepStyle.id,
+            )
+            val dead = cache.keys.filterNot { k -> keepPrefixes.any { k.startsWith(it) } }
+            dead.forEach { cache.remove(it) }
+        }
     }
 
     /**

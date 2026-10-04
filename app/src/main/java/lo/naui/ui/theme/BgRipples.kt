@@ -41,7 +41,34 @@ object BgRipples {
         private set
 
     /**
-     * 从某个点起一圈。
+     * 记一个"想从这儿扩散"的位置，但**先不播**。
+     *
+     * 为什么分两步：新图要从 assets 解码（一张一百多 KB 的 PNG），
+     * 而点击那一瞬间图还没好。如果立即开跑，动画跑完了图才出来 ——
+     * 实机上看起来就是"先啪一下整张图占满屏幕，动画才跟上"。
+     *
+     * 所以：点击只登记，等图真加载完了再 [fire]。
+     */
+    private var pending: Pair<Float, Float>? = null
+
+    fun pend(x: Float, y: Float) {
+        if (Prefs.current?.powerSave == true) return
+        pending = x.coerceIn(0f, 1f) to y.coerceIn(0f, 1f)
+    }
+
+    /** 图就绪了，开始扩散 */
+    fun fire() {
+        val p = pending ?: return
+        pending = null
+
+        val now = System.currentTimeMillis()
+        // 先清掉已经跑完的，免得列表越堆越长
+        val alive = list.filter { now - it.at < LINGER_MS }
+        list = alive + Ripple(p.first, p.second, now)
+    }
+
+    /**
+     * 从某个点起一圈（立即）。
      *
      * [x] / [y] 是**归一化**的屏幕坐标（0~1）—— 这样不用管
      * 传进来的是 px 还是 dp，也不怕窗口尺寸变。
@@ -51,7 +78,6 @@ object BgRipples {
         if (Prefs.current?.powerSave == true) return
 
         val now = System.currentTimeMillis()
-        // 先清掉已经跑完的，免得列表越堆越长
         val alive = list.filter { now - it.at < LINGER_MS }
         list = alive + Ripple(x.coerceIn(0f, 1f), y.coerceIn(0f, 1f), now)
     }

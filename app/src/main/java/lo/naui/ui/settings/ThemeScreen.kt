@@ -1,5 +1,6 @@
 package lo.naui.ui.settings
 
+import androidx.compose.foundation.border
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.animateFloatAsState
@@ -448,14 +449,20 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
                         ) {
                             val segW = maxWidth / 3
 
-                            // 滑过去的那块
+                            // 滑过去的那块。
+                            // 现在按钮图是铺满的，实心色块会把图整个盖掉 ——
+                            // 所以只描一圈边，既有"选中在滑过去"的感觉，又不挡图。
                             Box(
                                 Modifier
                                     .offset(x = segW * slide)
                                     .width(segW)
                                     .height(38.dp)
                                     .clip(RoundedCornerShape(50))
-                                    .background(MiuixTheme.colorScheme.primary),
+                                    .border(
+                                        width = 2.dp,
+                                        color = MiuixTheme.colorScheme.primary,
+                                        shape = RoundedCornerShape(50),
+                                    ),
                             )
 
                             Row(Modifier.fillMaxWidth()) {
@@ -475,7 +482,9 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
                                             }
                                             .clip(RoundedCornerShape(50))
                                             .clickable {
-                                                lo.naui.ui.theme.BgRipples.add(cx, cy)
+                                                // 只登记位置，等图加载完再放 ——
+                                                // 不然动画跑完了图才出来
+                                                lo.naui.ui.theme.BgRipples.pend(cx, cy)
                                                 prefs.updateBgStyle(st)
                                             },
                                         contentAlignment = Alignment.Center,
@@ -485,18 +494,33 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
                                         else MiuixTheme.colorScheme.onSurface
 
                                         when (st) {
-                                            // 1 和 2 用压缩包里那两张按钮图
+                                            // 1 和 2：压缩包里给的那张图**铺满整个按钮**，
+                                            // 当背景板用 —— 不是缩成一个小图标摆中间
                                             BgStyle.Nk, BgStyle.Gc -> {
                                                 val bmp = remember(st) {
-                                                    val n = if (st == BgStyle.Nk) "bg/btn_nk.png" else "bg/btn_gc.png"
+                                                    val n = if (st == BgStyle.Nk) "bg/btn_nk.png"
+                                                    else "bg/btn_gc.png"
                                                     lo.naui.ui.theme.BuiltinBg.load(ctx, n)
                                                 }
                                                 if (bmp != null) {
                                                     androidx.compose.foundation.Image(
                                                         bitmap = bmp.asImageBitmap(),
                                                         contentDescription = st.label,
-                                                        modifier = Modifier.height(20.dp),
+                                                        contentScale = androidx.compose.ui.layout
+                                                            .ContentScale.Crop,
+                                                        modifier = Modifier.fillMaxSize(),
                                                     )
+                                                    // 选中的压一层主色，区分开
+                                                    if (on) {
+                                                        Box(
+                                                            Modifier
+                                                                .fillMaxSize()
+                                                                .background(
+                                                                    MiuixTheme.colorScheme.primary
+                                                                        .copy(alpha = 0.35f)
+                                                                )
+                                                        )
+                                                    }
                                                 } else {
                                                     Text(st.label, fontSize = 13.sp, color = tint)
                                                 }

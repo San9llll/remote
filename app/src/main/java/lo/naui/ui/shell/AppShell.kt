@@ -149,6 +149,12 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
     // 上一张壁纸 —— 切背景的时候要留着它当"被覆盖的那层"
     var prevWallpaper by remember { mutableStateOf<ImageBitmap?>(null) }
 
+    // 启动时把当前样式的图先解好放缓存 —— 之后切换就是直接拿，没有解码那一下
+    LaunchedEffect(prefs.bgStyle) {
+        lo.naui.ui.theme.BuiltinBg.preload(ctx, prefs.bgStyle)
+        lo.naui.ui.theme.BuiltinBg.trim(prefs.bgStyle, ctx)
+    }
+
     LaunchedEffect(prefs.bgStyle, prefs.homeImage, prefs.builtinHero) {
         // 换之前先把当前这张记下来
         if (wallpaper != null) prevWallpaper = wallpaper
@@ -173,6 +179,11 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
         } else {
             wallpaper = null
         }
+
+        // 图好了 —— 这时候才真的开始扩散。
+        // 之前是点击就开跑，结果动画跑完了图才解出来，
+        // 看起来就是"先拉出一整张占满屏幕，动画才跟上"。
+        lo.naui.ui.theme.BgRipples.fire()
     }
 
     LaunchedEffect(prefs.contentImage, prefs.bgStyle) {
@@ -332,82 +343,50 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
                 darkScrim = isDarkTheme,
             )
 
-            // ①.5 涟漪遮罩：切背景的时候，旧图只在"圆外"露出来
+            // ①.5 涟漪层（在卡片**下面**，所以不挡内容）
             //
-            // 为什么这么绕：要的是"新图从点击点长出来"。
-            // 所以底下的背景层照旧画新的，上面这层把**旧图**盖住，
-            // 但裁掉扩散圆覆盖的那部分 —— 圆扩到哪儿，哪儿就露出新图。
-            // 涟漪要一帧一帧地推进，所以得有个东西持续触发重组。
-            // 没有它的话 Canvas 只会画一次，圆就停在原地了。
+            // 结构改过一次，现在是：
+            //   先铺**旧图**（铺满）      ← 过渡期间看到的一直是它
+            //   再在**圆内**画新图        ← 圆扩到哪儿，哪儿才变
+            //
+            // 之前是反的（底层新图 + 旧图裁掉圆内），实机上表现成
+            // "先拉出一整张新图占满屏幕，动画才跟上"，而且用了 Path.op（很贵，会卡）。
+            // 现在只用 clipPath，便宜得多。
             var frameTick by remember { mutableIntStateOf(0) }
             LaunchedEffect(Unit) {
                 while (true) {
                     if (lo.naui.ui.theme.BgRipples.active().isNotEmpty()) {
                         frameTick++
                     }
-                    kotlinx.coroutines.delay(16)   // ~60fps，只在有涟漪时才真正干活
+                    kotlinx.coroutines.delay(16)
                 }
             }
 
             val ripples = lo.naui.ui.theme.BgRipples.active()
             @Suppress("UNUSED_EXPRESSION")
-            run { frameTick }   // 让它参与重组
+            run { frameTick }
 
-            if (ripples.isNotEmpty() && prevWallpaper != null) {
+            if (ripples.isNotEmpty() && prevWallpaper != null && wallpaper != null) {
                 androidx.compose.foundation.Canvas(Modifier.fillMaxSize().zIndex(0.2f)) {
                     val now = System.currentTimeMillis()
-
-                    // 把所有扩散圆并成一条路径
-                    val circles = androidx.compose.ui.graphics.Path()
-                    ripples.forEach { r ->
-                        val p = lo.naui.ui.theme.BgRipples.progressOf(r, now)
-                        val cx = size.width * r.cx
-                        val cy = size.height * r.cy
-                        val maxR = maxOf(
-                            kotlin.math.hypot(cx, cy),
-                            kotlin.math.hypot(size.width - cx, cy),
-                            kotlin.math.hypot(cx, size.height - cy),
-                            kotlin.math.hypot(size.width - cx, size.height - cy),
-                        )
-                        val radius = (maxR * p).coerceAtLeast(1f)
-                        circles.addOval(
-                            androidx.compose.ui.geometry.Rect(
-                                cx - radius, cy - radius, cx + radius, cy + radius
-                            )
-                        )
-                    }
-
-                    // 整屏 减 圆 = 圆外那块。
-                    // ⚠️ Path.op 是**三参数**版本（path1, path2, operation），
-                    // 写两个参数编译期就报 "actual type is PathOperation, but Path was expected"
-                    val full = androidx.compose.ui.graphics.Path().apply {
-                        addRect(
-                            androidx.compose.ui.geometry.Rect(0f, 0f, size.width, size.height)
-                        )
-                    }
-                    val outside = androidx.compose.ui.graphics.Path().apply {
-                        op(full, circles, androidx.compose.ui.graphics.PathOperation.Difference)
-                    }
-
-                    // 圆外画旧图（ImageBitmap 直接就能 drawImage，不用绕）
                     val old = prevWallpaper ?: return@Canvas
-                    clipPath(outside) {
-                        drawImage(
-                            image = old,
-                            srcOffset = androidx.compose.ui.unit.IntOffset.Zero,
-                            srcSize = androidx.compose.ui.unit.IntSize(old.width, old.height),
-                            dstOffset = androidx.compose.ui.unit.IntOffset.Zero,
-                            dstSize = androidx.compose.ui.unit.IntSize(
-                                size.width.toInt(), size.height.toInt()
-                            ),
-                        )
-                    }
+                    val new = wallpaper ?: return@Canvas
 
-                    // 切线：一圈液态玻璃的光，扩完慢慢淡掉
+                    // ---- 第一步：旧图铺满 ----
+                    drawImage(
+                        image = old,
+                        srcOffset = androidx.compose.ui.unit.IntOffset.Zero,
+                        srcSize = androidx.compose.ui.unit.IntSize(old.width, old.height),
+                        dstOffset = androidx.compose.ui.unit.IntOffset.Zero,
+                        dstSize = androidx.compose.ui.unit.IntSize(
+                            size.width.toInt(), size.height.toInt()
+                        ),
+                    )
+
+                    // ---- 第二步：圆内画新图 ----
+                    // 每个涟漪一个圆，各自按自己的进度长大
                     ripples.forEach { r ->
                         val p = lo.naui.ui.theme.BgRipples.progressOf(r, now)
-                        val a = lo.naui.ui.theme.BgRipples.edgeAlphaOf(r, now)
-                        if (p >= 1f || a <= 0.01f) return@forEach
                         val cx = size.width * r.cx
                         val cy = size.height * r.cy
                         val maxR = maxOf(
@@ -417,51 +396,77 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
                             kotlin.math.hypot(size.width - cx, size.height - cy),
                         )
                         val radius = (maxR * p).coerceAtLeast(1f)
-                        // 分界那圈液态玻璃 —— 画三层才有"玻璃"的厚度感：
-                        //   ① 外面一大圈很淡的雾（折射的边缘）
-                        //   ② 中间那圈比较亮（玻璃的边）
-                        //   ③ 最里一条细白线（玻璃的高光）
-                        val center = androidx.compose.ui.geometry.Offset(cx, cy)
 
-                        // ① 雾
-                        drawCircle(
-                            brush = androidx.compose.ui.graphics.Brush.radialGradient(
-                                colors = listOf(
-                                    androidx.compose.ui.graphics.Color.Transparent,
-                                    androidx.compose.ui.graphics.Color.White.copy(alpha = 0.10f * a),
-                                    androidx.compose.ui.graphics.Color.Transparent,
+                        val circle = androidx.compose.ui.graphics.Path().apply {
+                            addOval(
+                                androidx.compose.ui.geometry.Rect(
+                                    cx - radius, cy - radius, cx + radius, cy + radius
+                                )
+                            )
+                        }
+
+                        clipPath(circle) {
+                            drawImage(
+                                image = new,
+                                srcOffset = androidx.compose.ui.unit.IntOffset.Zero,
+                                srcSize = androidx.compose.ui.unit.IntSize(new.width, new.height),
+                                dstOffset = androidx.compose.ui.unit.IntOffset.Zero,
+                                dstSize = androidx.compose.ui.unit.IntSize(
+                                    size.width.toInt(), size.height.toInt()
                                 ),
-                                center = center,
-                                radius = radius,
-                            ),
-                            radius = radius,
-                            center = center,
-                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 48.dp.toPx()),
-                        )
+                            )
+                        }
 
-                        // ② 玻璃的边
-                        drawCircle(
-                            brush = androidx.compose.ui.graphics.Brush.radialGradient(
-                                colors = listOf(
-                                    androidx.compose.ui.graphics.Color.Transparent,
-                                    androidx.compose.ui.graphics.Color.White.copy(alpha = 0.42f * a),
-                                    androidx.compose.ui.graphics.Color.Transparent,
-                                ),
-                                center = center,
-                                radius = radius,
-                            ),
-                            radius = radius,
-                            center = center,
-                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 26.dp.toPx()),
-                        )
+                        // ---- 切线：跟卡片同款的玻璃质感 ----
+                        // 画不出真折射（那要 drawBackdrop，Canvas 里没有），
+                        // 但可以照着卡片的观感叠：一层宽雾 + 一层亮边 + 一条高光。
+                        // 再往外扫一点渐变，看着就像"玻璃的边缘在推过去"。
+                        if (p < 1f) {
+                            val a = lo.naui.ui.theme.BgRipples.edgeAlphaOf(r, now)
+                            if (a > 0.01f) {
+                                val center = androidx.compose.ui.geometry.Offset(cx, cy)
 
-                        // ③ 高光细线
-                        drawCircle(
-                            color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.55f * a),
-                            radius = radius,
-                            center = center,
-                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx()),
-                        )
+                                // 外圈雾（玻璃的厚度）
+                                drawCircle(
+                                    brush = androidx.compose.ui.graphics.Brush.radialGradient(
+                                        colors = listOf(
+                                            androidx.compose.ui.graphics.Color.Transparent,
+                                            androidx.compose.ui.graphics.Color.White.copy(alpha = 0.12f * a),
+                                            androidx.compose.ui.graphics.Color.Transparent,
+                                        ),
+                                        center = center,
+                                        radius = radius,
+                                    ),
+                                    radius = radius,
+                                    center = center,
+                                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = 56.dp.toPx()),
+                                )
+
+                                // 玻璃边
+                                drawCircle(
+                                    brush = androidx.compose.ui.graphics.Brush.radialGradient(
+                                        colors = listOf(
+                                            androidx.compose.ui.graphics.Color.Transparent,
+                                            androidx.compose.ui.graphics.Color.White.copy(alpha = 0.34f * a),
+                                            androidx.compose.ui.graphics.Color.Transparent,
+                                        ),
+                                        center = center,
+                                        radius = radius,
+                                    ),
+                                    radius = radius,
+                                    center = center,
+                                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = 24.dp.toPx()),
+                                )
+
+                                // 高光细线
+                                drawCircle(
+                                    color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.5f * a),
+                                    radius = radius,
+                                    center = center,
+                                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.5.dp.toPx()),
+                                )
+                            }
+                        }
                     }
                 }
             }

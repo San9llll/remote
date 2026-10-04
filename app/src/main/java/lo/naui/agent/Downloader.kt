@@ -33,6 +33,8 @@ object Downloader {
 
     data class Task(
         val id: String,
+        /** 属于哪个会话 —— 进度要报到对应的那一份上 */
+        val conversationId: String = "",
         val url: String,
         val path: String,
         val startedAt: Long = System.currentTimeMillis(),
@@ -89,9 +91,9 @@ object Downloader {
      *
      * 路径是相对沙箱根算的 —— 要存到 sdcard 就传绝对路径。
      */
-    fun start(ctx: Context, url: String, path: String): Task {
+    fun start(ctx: Context, conversationId: String, url: String, path: String): Task {
         val id = "dl" + (++seq) + "_" + (System.currentTimeMillis() % 100000)
-        val t = Task(id = id, url = url, path = path)
+        val t = Task(id = id, conversationId = conversationId, url = url, path = path)
         tasks[id] = t
 
         scope.launch {
@@ -141,8 +143,8 @@ object Downloader {
                 t.ok = true
                 t.done = true
                 // 界面上那条进度条也收掉
-                AgentTaskStore.updateToolProgress(1f)
-                AgentTaskStore.updateToolSpeed("")
+                AgentTaskStore.updateToolProgress(t.conversationId, 1f)
+                AgentTaskStore.updateToolSpeed(t.conversationId, "")
             }.onFailure { e ->
                 t.done = true
                 t.ok = false
@@ -176,9 +178,9 @@ object Downloader {
             if (now - lastReport > 400) {
                 lastReport = now
                 if (t.total > 0) {
-                    AgentTaskStore.updateToolProgress((t.got.toFloat() / t.total).coerceIn(0f, 1f))
+                    AgentTaskStore.updateToolProgress(t.conversationId, (t.got.toFloat() / t.total).coerceIn(0f, 1f))
                 }
-                AgentTaskStore.updateToolSpeed(t.speed)
+                AgentTaskStore.updateToolSpeed(t.conversationId, t.speed)
             }
         }
     }

@@ -224,7 +224,7 @@ class FloatingBallService : Service() {
         val count = AgentTaskStore.runningCount
         val running = count > 0
         // 拿最后那个在跑的会话的进度当提示
-        val hint = AgentTaskStore.state.progress
+        val hint = ""
 
         runCatching {
             (dot.background as? GradientDrawable)?.setColor(

@@ -693,7 +693,7 @@ private fun AppBackdropLayer(
     Box(Modifier.fillMaxSize()) {
         if (panorama) {
             HomeSceneBackdrop(
-                wallpaper = shownWallpaper,
+                wallpaper = wallpaper,
                 railWidth = railWidth,
                 blurred = blurred,
                 drawDecor = blurred,

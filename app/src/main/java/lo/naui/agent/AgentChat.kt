@@ -55,6 +55,8 @@ object AgentChat {
 
     suspend fun run(
         ctx: Context,
+        /** 哪个会话 —— Store 里所有东西都按它分开放 */
+        conversationId: String,
         system: String,
         history: List<ChatMessage>,
         env: AgentEnv,
@@ -118,7 +120,7 @@ object AgentChat {
 
             while (round++ < maxRounds) {
                 // 新一轮 —— 这回是在跟模型说话，没在跑工具，把那条收掉
-                AgentTaskStore.updateRunningTool("", "")
+                AgentTaskStore.updateRunningTool(conversationId, "", "")
                 onProgress(if (round == 1) "在想…" else "第 " + round + " 轮…")
 
                 val reply = AgentApi.stream(
@@ -141,7 +143,7 @@ object AgentChat {
                 onRound(round)
 
                 if (reply.toolCalls.isEmpty()) {
-                    AgentTaskStore.updateRunningTool("", "")
+                    AgentTaskStore.updateRunningTool(conversationId, "", "")
                     return@runCatching AgentRun(
                         reply = reply.text.ifBlank { "（模型没说话）" },
                         toolLog = log,
@@ -160,15 +162,15 @@ object AgentChat {
                     onProgress("正在用 " + label)
 
                     // 告诉界面"现在在跑什么"，好让进度条转起来
-                    AgentTaskStore.updateRunningTool(label, guessHint(call.name, call.args))
+                    AgentTaskStore.updateRunningTool(conversationId, label, guessHint(call.name, call.args))
 
                     val t0 = System.currentTimeMillis()
                     val result = AgentTools.run(
                         ctx, env, call.name, call.args, askUser,
                         // 逐行看输出，认出下载进度和速度就更新到界面上
                         onLine = { line ->
-                            Progress.parse(line)?.let { AgentTaskStore.updateToolProgress(it) }
-                            Progress.speed(line)?.let { AgentTaskStore.updateToolSpeed(it) }
+                            Progress.parse(line)?.let { AgentTaskStore.updateToolProgress(conversationId, it) }
+                            Progress.speed(line)?.let { AgentTaskStore.updateToolSpeed(conversationId, it) }
                         },
                     )
                     val cost = System.currentTimeMillis() - t0

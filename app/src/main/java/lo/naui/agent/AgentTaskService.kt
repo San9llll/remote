@@ -92,6 +92,7 @@ class AgentTaskService : Service() {
 
         val result = AgentChat.run(
             ctx = this,
+            conversationId = convId,
             system = system,
             history = history,
             env = env,

@@ -112,16 +112,16 @@ object BuiltinBg {
      * 会明显顿一下（用户反馈"切换时太卡"）。
      * 而且这些图是**打包死的**，内容永远不变，缓存起来完全安全。
      */
-    private val cache = HashMap<String, Bitmap>()
+    private val bitmapCache = HashMap<String, Bitmap>()
 
     /** 从 assets 读一张图（带缓存） */
     fun load(ctx: Context, assetPath: String?): Bitmap? {
         if (assetPath.isNullOrBlank()) return null
-        cache[assetPath]?.let { return it }
+        bitmapCache[assetPath]?.let { return it }
         val bmp = runCatching {
             ctx.assets.open(assetPath).use { BitmapFactory.decodeStream(it) }
         }.getOrNull()
-        if (bmp != null) cache[assetPath] = bmp
+        if (bmp != null) bitmapCache[assetPath] = bmp
         return bmp
     }
 
@@ -157,8 +157,8 @@ object BuiltinBg {
                 "bg/settings/" + keepStyle.id,
                 "bg/btn_" + keepStyle.id,
             )
-            val dead = cache.keys.filterNot { k -> keepPrefixes.any { k.startsWith(it) } }
-            dead.forEach { cache.remove(it) }
+            val dead = bitmapCache.keys.filterNot { k -> keepPrefixes.any { k.startsWith(it) } }
+            dead.forEach { bitmapCache.remove(it) }
         }
     }
 

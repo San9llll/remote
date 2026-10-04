@@ -164,19 +164,19 @@ object AgentTaskStore {
         streams = streams + (convId to cur.copy(steps = cur.steps + line))
     }
 
-    fun setRunningTool(convId: String, label: String, hint: String) {
+    fun updateRunningTool(convId: String, label: String, hint: String) {
         val cur = streamOf(convId)
         streams = streams + (convId to cur.copy(
             tool = label, toolHint = hint, progress = -1f, speed = ""
         ))
     }
 
-    fun setToolProgress(convId: String, p: Float) {
+    fun updateToolProgress(convId: String, p: Float) {
         val cur = streamOf(convId)
         streams = streams + (convId to cur.copy(progress = p.coerceIn(0f, 1f)))
     }
 
-    fun setToolSpeed(convId: String, s: String) {
+    fun updateToolSpeed(convId: String, s: String) {
         val cur = streamOf(convId)
         streams = streams + (convId to cur.copy(speed = s))
     }

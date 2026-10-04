@@ -146,8 +146,17 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
     var pageBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
 
     // 壁纸：1 / 2 走 assets 里那两套内置图（每次启动随机一张），自定义走用户选的
-    // 上一张壁纸 —— 切背景的时候要留着它当"被覆盖的那层"
-    var prevWallpaper by remember { mutableStateOf<ImageBitmap?>(null) }
+    /**
+     * 底层真正显示的图。
+     *
+     * 为什么要跟"刚加载好的图"分开：
+     * 切样式的时候，底层必须**还挂着旧图**，让涟漪慢慢推过去。
+     * 如果直接把新图塞给底层，用户一眨眼就看到满屏新图，动画就白做了。
+     */
+    var shownWallpaper by remember { mutableStateOf<ImageBitmap?>(null) }
+
+    /** 刚加载好、等着被"推"出来的新图 */
+    var pendingWallpaper by remember { mutableStateOf<ImageBitmap?>(null) }
 
     // 启动时把当前样式的图先解好放缓存 —— 之后切换就是直接拿，没有解码那一下
     LaunchedEffect(prefs.bgStyle) {
@@ -156,13 +165,9 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
     }
 
     LaunchedEffect(prefs.bgStyle, prefs.homeImage, prefs.builtinHero) {
-        // 换之前先把当前这张记下来
-        if (wallpaper != null) prevWallpaper = wallpaper
-
         val bmp = if (prefs.bgStyle == lo.naui.ui.theme.BgStyle.Custom) {
             loadBitmap(prefs.homeImage)
         } else {
-            // 内置那套：没挑过就先随机一张记下来
             var path = prefs.builtinHero
             if (path.isBlank()) {
                 path = lo.naui.ui.theme.BuiltinBg.randomHero(ctx, prefs.bgStyle).orEmpty()
@@ -172,18 +177,34 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
         }
 
         if (bmp != null) {
-            wallpaper = bmp.asImageBitmap()
-            // 取色要的是 android.graphics.Bitmap，所以原图先留着
+            val img = bmp.asImageBitmap()
             val (seed, isLight) = lo.naui.ui.theme.dominantSeed(bmp)
             prefs.saveWallpaperSeed(seed, isLight)
+
+            if (shownWallpaper == null) {
+                // 头一次加载：没有旧图可过渡，直接上
+                shownWallpaper = img
+                wallpaper = img
+                lo.naui.ui.theme.BgRipples.clear()
+            } else {
+                // 换图：新图先挂到 pending，等涟漪把它推出来
+                pendingWallpaper = img
+                lo.naui.ui.theme.BgRipples.fire()
+            }
         } else {
+            shownWallpaper = null
             wallpaper = null
         }
+    }
 
-        // 图好了 —— 这时候才真的开始扩散。
-        // 之前是点击就开跑，结果动画跑完了图才解出来，
-        // 看起来就是"先拉出一整张占满屏幕，动画才跟上"。
-        lo.naui.ui.theme.BgRipples.fire()
+    // 涟漪跑完了 → 把 pending 扶正，底层这才换图
+    val nowRipples = lo.naui.ui.theme.BgRipples.active()
+    LaunchedEffect(nowRipples.isEmpty(), pendingWallpaper) {
+        if (nowRipples.isEmpty() && pendingWallpaper != null) {
+            shownWallpaper = pendingWallpaper
+            wallpaper = pendingWallpaper
+            pendingWallpaper = null
+        }
     }
 
     LaunchedEffect(prefs.contentImage, prefs.bgStyle) {
@@ -258,7 +279,7 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
             Sub.None -> when (dest) {
                 Dest.Home -> HomeScreen(
                     railWidth = if (showSceneRail) sceneRailWidth else 0.dp,
-                    wallpaper = wallpaper,
+                    wallpaper = shownWallpaper,
                     backdrop = backdrop,
                 )
                 Dest.Modules -> ToolsScreen(
@@ -319,7 +340,7 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
             Box(Modifier.fillMaxSize().layerBackdrop(backdrop)) {
                 AppBackdropLayer(
                     panorama = panorama,
-                    wallpaper = wallpaper,
+                    wallpaper = shownWallpaper,
                     railWidth = if (showSceneRail) sceneRailWidth else 0.dp,
                     pageBitmap = pageBitmap,
                     showPageBg = showPageBg,
@@ -333,7 +354,7 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
             // ② 视觉层：糊 + 压黑，这才是你眼睛看到的那张背景
             AppBackdropLayer(
                 panorama = panorama,
-                wallpaper = wallpaper,
+                wallpaper = shownWallpaper,
                 railWidth = if (showSceneRail) sceneRailWidth else 0.dp,
                 pageBitmap = pageBitmap,
                 showPageBg = showPageBg,
@@ -366,11 +387,14 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
             @Suppress("UNUSED_EXPRESSION")
             run { frameTick }
 
-            if (ripples.isNotEmpty() && prevWallpaper != null && wallpaper != null) {
+            // 条件只看"有没有涟漪"和"两张图在不在"——
+            // 之前卡在 prevWallpaper 上，而它第一轮可能是 null，
+            // 结果整层不画，用户直接看到底层的新图（这就是"看不到动画"的原因）
+            if (ripples.isNotEmpty() && shownWallpaper != null && pendingWallpaper != null) {
                 androidx.compose.foundation.Canvas(Modifier.fillMaxSize().zIndex(0.2f)) {
                     val now = System.currentTimeMillis()
-                    val old = prevWallpaper ?: return@Canvas
-                    val new = wallpaper ?: return@Canvas
+                    val old = shownWallpaper ?: return@Canvas
+                    val new = pendingWallpaper ?: return@Canvas
 
                     // ---- 第一步：旧图铺满 ----
                     drawImage(
@@ -619,7 +643,7 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
                         sub = Sub.None
                     },
                     clockStyle = prefs.clockStyle,
-                    wallpaper = wallpaper,
+                    wallpaper = shownWallpaper,
                     showBattery = prefs.railShowBattery,
                     showInfo = prefs.railShowInfo,
                     infoLines = prefs.railInfoList(),
@@ -669,7 +693,7 @@ private fun AppBackdropLayer(
     Box(Modifier.fillMaxSize()) {
         if (panorama) {
             HomeSceneBackdrop(
-                wallpaper = wallpaper,
+                wallpaper = shownWallpaper,
                 railWidth = railWidth,
                 blurred = blurred,
                 drawDecor = blurred,

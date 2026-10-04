@@ -440,28 +440,27 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
                             label = "bgseg",
                         )
 
+                        // 外框就是一条圆角胶囊（Aster 悬浮底栏那个样子）
                         BoxWithConstraints(
                             Modifier
                                 .fillMaxWidth()
+                                .height(46.dp)
                                 .clip(RoundedCornerShape(50))
                                 .background(MiuixTheme.colorScheme.surfaceContainerHigh)
                                 .padding(4.dp),
                         ) {
                             val segW = maxWidth / 3
 
-                            // 滑过去的那块。
-                            // 现在按钮图是铺满的，实心色块会把图整个盖掉 ——
-                            // 所以只描一圈边，既有"选中在滑过去"的感觉，又不挡图。
+                            // 滑过去的那块高亮 —— Aster 那条底栏就是这么做的：
+                            // 一个圆角块在选项之间滑，而不是给每个按钮各自描边。
                             Box(
                                 Modifier
                                     .offset(x = segW * slide)
                                     .width(segW)
                                     .height(38.dp)
                                     .clip(RoundedCornerShape(50))
-                                    .border(
-                                        width = 2.dp,
-                                        color = MiuixTheme.colorScheme.primary,
-                                        shape = RoundedCornerShape(50),
+                                    .background(
+                                        MiuixTheme.colorScheme.primary.copy(alpha = 0.16f)
                                     ),
                             )
 
@@ -503,24 +502,17 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
                                                     lo.naui.ui.theme.BuiltinBg.load(ctx, n)
                                                 }
                                                 if (bmp != null) {
+                                                    // 照 Aster 那条悬浮底栏的观感：
+                                                    // **未选中 20% 透明度，选中 60%** ——
+                                                    // 靠图本身的浓淡区分，不再压色块
                                                     androidx.compose.foundation.Image(
                                                         bitmap = bmp.asImageBitmap(),
                                                         contentDescription = st.label,
                                                         contentScale = androidx.compose.ui.layout
                                                             .ContentScale.Crop,
+                                                        alpha = if (on) 0.60f else 0.20f,
                                                         modifier = Modifier.fillMaxSize(),
                                                     )
-                                                    // 选中的压一层主色，区分开
-                                                    if (on) {
-                                                        Box(
-                                                            Modifier
-                                                                .fillMaxSize()
-                                                                .background(
-                                                                    MiuixTheme.colorScheme.primary
-                                                                        .copy(alpha = 0.35f)
-                                                                )
-                                                        )
-                                                    }
                                                 } else {
                                                     Text(st.label, fontSize = 13.sp, color = tint)
                                                 }

@@ -22,26 +22,37 @@ object XposedActive {
 
     private val ALIVE = File("/sdcard/Nakour/xposed_alive.txt")
 
-    fun isActive(ctx: Context): Boolean = runCatching { ALIVE.exists() }.getOrDefault(false)
+    /** 备用位置：sdcard 写不进去的时候，Xposed 那边会往这儿塞 */
+    private fun alt(ctx: Context) = File(ctx.filesDir, "xposed_alive.txt")
+
+    private fun aliveFile(ctx: Context): File? =
+        when {
+            ALIVE.exists() -> ALIVE
+            alt(ctx).exists() -> alt(ctx)
+            else -> null
+        }
+
+    fun isActive(ctx: Context): Boolean =
+        runCatching { aliveFile(ctx) != null }.getOrDefault(false)
 
     /** 那个文件是 `时间戳|API版本|框架名`，切一下 */
-    private fun parts(): List<String> = runCatching {
-        if (!ALIVE.exists()) emptyList()
-        else ALIVE.readText().trim().split("|")
+    private fun parts(ctx: Context): List<String> = runCatching {
+        val f = aliveFile(ctx) ?: return runCatching { emptyList<String>() }.getOrThrow()
+        f.readText().trim().split("|")
     }.getOrDefault(emptyList())
 
     /** 它上次报活是什么时候 */
-    fun lastSeen(): String = runCatching {
-        val t = parts().getOrNull(0)?.toLongOrNull() ?: return@runCatching ""
+    fun lastSeen(ctx: Context): String = runCatching {
+        val t = parts(ctx).getOrNull(0)?.toLongOrNull() ?: return@runCatching ""
         java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault())
             .format(java.util.Date(t))
     }.getOrDefault("")
 
     /** Xposed API 版本（LSPosed 一般给 82 / 93） */
-    fun apiVersion(): Int = parts().getOrNull(1)?.toIntOrNull() ?: 0
+    fun apiVersion(ctx: Context): Int = parts(ctx).getOrNull(1)?.toIntOrNull() ?: 0
 
     /** 框架名（LSPosed / EdXposed / Xposed） */
-    fun framework(): String = parts().getOrNull(2)?.takeIf { it.isNotBlank() } ?: ""
+    fun framework(ctx: Context): String = parts(ctx).getOrNull(2)?.takeIf { it.isNotBlank() } ?: ""
 
     /**
      * LSPosed 管理器的版本。
@@ -63,8 +74,8 @@ object XposedActive {
      */
     fun summary(ctx: Context): String {
         if (!isActive(ctx)) return "未生效"
-        val fw = framework().ifBlank { "Xposed" }
-        val api = apiVersion()
+        val fw = framework(ctx).ifBlank { "Xposed" }
+        val api = apiVersion(ctx)
         val mgr = managerVersion(ctx)
         return buildString {
             append(fw)

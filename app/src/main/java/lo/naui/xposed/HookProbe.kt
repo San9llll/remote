@@ -81,15 +81,30 @@ object HookProbe {
      */
     fun sayAlive() {
         runCatching {
-            if (!DIR.exists()) DIR.mkdirs()
-
             val api = runCatching { XposedBridge.getXposedVersion() }.getOrDefault(0)
             val name = frameworkName()
+            val content = System.currentTimeMillis().toString() + "|" + api + "|" + name
 
-            File(DIR, "xposed_alive.txt").writeText(
-                System.currentTimeMillis().toString() + "|" + api + "|" + name
-            )
-            log("报活：API=$api 框架=$name")
+            // 首选 sdcard —— App 和 SystemUI 都能碰
+            var wrote = false
+            runCatching {
+                if (!DIR.exists()) DIR.mkdirs()
+                File(DIR, "xposed_alive.txt").writeText(content)
+                wrote = true
+            }.onFailure { log("写 sdcard 失败：${it.message}") }
+
+            // sdcard 写不进去（分区存储 / 没权限）就退回自己的 data 目录。
+            // 那个位置 App 肯定读得到（同一个包名），只是 SystemUI 未必写得进 —— 试一把。
+            if (!wrote) {
+                runCatching {
+                    val alt = java.io.File("/data/data/lo.naui/files/xposed_alive.txt")
+                    alt.parentFile?.mkdirs()
+                    alt.writeText(content)
+                    wrote = true
+                }.onFailure { log("写 data 也失败：${it.message}") }
+            }
+
+            log("报活：API=" + api + " 框架=" + name + " 写入" + (if (wrote) "成功" else "失败"))
         }
     }
 

@@ -64,16 +64,22 @@ class NakourXposed : IXposedHookLoadPackage {
     }
 
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
-        // 只在 SystemUI 里干活
         val pkg = lpparam.packageName
-        if (pkg != "com.android.systemui" && pkg != "com.oplus.systemui" &&
-            pkg != "com.coloros.systemui"
-        ) {
-            return
-        }
 
-        log("挂上了：$pkg（classLoader=${lpparam.classLoader}）")
+        // 只要框架把模块加载了，**先无条件报个活** ——
+        // 用户反馈"LSP 权限一直显示未生效"，但分不清是
+        //   ① 模块压根没被加载
+        //   ② 加载了但存活的痕迹没写进去
+        // 所以先在最前面写一次，作用域里任何一个进程被 hook 到都会留下痕迹。
         HookProbe.sayAlive()
+        log("挂上了：$pkg（classLoader=${lpparam.classLoader}）")
+
+        // 再看是不是我们真正要干活的那几个进程
+        val isTarget = pkg == "com.android.systemui" ||
+            pkg == "com.oplus.systemui" ||
+            pkg == "com.coloros.systemui" ||
+            pkg == "com.miui.systemui"
+        if (!isTarget) return
 
         // ---- 自动适配 hook 点 ----
         // 初次装 / 系统更新之后跑一次，结果写到 sdcard/Nakour/hook_probe.json，

@@ -220,9 +220,11 @@ class FloatingBallService : Service() {
     }
 
     private fun refresh() {
-        val running = AgentTaskStore.state.running
-        val hint = AgentTaskStore.streamingReasoning.ifBlank { AgentTaskStore.state.progress }
-        val steps = AgentTaskStore.streamingSteps.size
+        // 现在是按会话分开跑的 —— 球上显示"总共有几个在跑"
+        val count = AgentTaskStore.runningCount
+        val running = count > 0
+        // 拿最后那个在跑的会话的进度当提示
+        val hint = AgentTaskStore.state.progress
 
         runCatching {
             (dot.background as? GradientDrawable)?.setColor(
@@ -234,11 +236,7 @@ class FloatingBallService : Service() {
             )
             if (running) {
                 label.visibility = View.VISIBLE
-                val text = when {
-                    hint.isNotBlank() -> hint.take(16)
-                    steps > 0 -> "用了 " + steps + " 次工具"
-                    else -> "在跑…"
-                }
+                val text = if (count > 1) count.toString() + " 个任务在跑" else "在跑…"
                 if (label.text.toString() != text) label.text = text
             } else {
                 label.visibility = View.GONE

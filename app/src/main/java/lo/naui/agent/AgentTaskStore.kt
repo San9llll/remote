@@ -6,15 +6,22 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 
 /**
- * 正在跑的那个 Agent 任务的状态。
+ * Agent 任务的运行状态。
  *
- * 用户抱怨的场景：发一个要想很久的任务，切去主页 / 甚至退出去再进来，
- * 回来就只剩自己那条消息了，进程和状态全看不到。
+ * ## 为什么是"每个会话一份"
  *
- * 所以任务的**运行状态放在这儿**（进程级单例），界面只是"看"它 ——
- * 切页不会打断、回来还能看到"还在想第 3 轮"。
+ * 用户要的：会话 A 还在思考的时候切到会话 B，
+ * **A 得继续在后台跑**，B 也要能自己发消息、自己思考，两边互不打扰。
  *
- * 真正的执行放在 [AgentTaskService]（前台服务）里，那是进程被杀也不容易死的地方。
+ * 以前这里是**全局单例**（同一时间只允许一个任务），切个会话就把前一个顶掉了。
+ * 现在改成按 conversationId 分开存：
+ *
+ * ```
+ * states["conv1"] = 正在跑第 3 轮…
+ * states["conv2"] = 正在跑第 1 轮…
+ * ```
+ *
+ * 服务那边也是每个会话起一个协程，互相不 cancel。
  */
 object AgentTaskStore {
 
@@ -35,197 +42,179 @@ object AgentTaskStore {
 
     data class State(
         val running: Boolean = false,
-        /** 跑的是哪个会话 */
         val conversationId: String = "",
-        /** 现在到哪一步了（"第 3 轮…" / "正在用 执行命令 …"） */
+        /** 现在到哪一步了 */
         val progress: String = "",
         val startedAt: Long = 0L,
         val finishedAt: Long = 0L,
-    )
-
-    /** 界面盯着这个 */
-    var state by mutableStateOf(State())
-        private set
-
-    /* ---------- 流式：边生成边给界面看 ---------- */
-
-    /** 正在生成的正文（还没定稿那一份） */
-    var streamingText by mutableStateOf("")
-        private set
-
-    /** 正在生成的思考内容 */
-    var streamingReasoning by mutableStateOf("")
-        private set
-
-    /** 这一轮已经想了几次 */
-    var streamingRounds by mutableStateOf(0)
-        private set
-
-    /**
-     * 现在正在跑哪个工具（空 = 没在跑）。
-     * 界面拿它显示一条进度条 —— 尤其是 AI 在跑 curl / wget 下载的时候。
-     */
-    var runningTool by mutableStateOf("")
-        private set
-
-    /** 正在跑的这条大概是在干嘛（"正在下载…" / "正在执行命令"） */
-    var runningToolHint by mutableStateOf("")
-        private set
-
-    /** 进度（0~1）。-1 = 算不出来，界面就画个来回跑的高光 */
-    var toolProgress by mutableStateOf(-1f)
-        private set
-
-    /** 速度那行字，比如 "3.2 MB/s" */
-    var toolSpeed by mutableStateOf("")
-        private set
-
-    fun updateRunningTool(label: String, hint: String) {
-        runningTool = label
-        runningToolHint = hint
-        toolProgress = -1f
-        toolSpeed = ""
+    ) {
+        companion object {
+            val IDLE = State()
+        }
     }
 
-    fun updateToolProgress(p: Float) {
-        toolProgress = p.coerceIn(0f, 1f)
+    /** 每个会话一份状态 */
+    private var states by mutableStateOf<Map<String, State>>(emptyMap())
+
+    /** 跑完的结果，按会话堆着 */
+    private var results by mutableStateOf<Map<String, Result>>(emptyMap())
+
+    /* ---------- 流式的中间内容，也是按会话分 ---------- */
+
+    private var streams by mutableStateOf<Map<String, Stream>>(emptyMap())
+
+    data class Stream(
+        val text: String = "",
+        val reasoning: String = "",
+        val rounds: Int = 0,
+        val steps: List<String> = emptyList(),
+        /** 现在在跑哪个工具 */
+        val tool: String = "",
+        val toolHint: String = "",
+        val progress: Float = -1f,
+        val speed: String = "",
+    ) {
+        companion object {
+            val EMPTY = Stream()
+        }
     }
 
-    fun updateToolSpeed(s: String) {
-        toolSpeed = s
+    /* ================= 读 ================= */
+
+    fun stateOf(convId: String?): State =
+        if (convId.isNullOrBlank()) State.IDLE else states[convId] ?: State.IDLE
+
+    fun streamOf(convId: String?): Stream =
+        if (convId.isNullOrBlank()) Stream.EMPTY else streams[convId] ?: Stream.EMPTY
+
+    /** 有几个会话正在跑（侧栏/悬浮球能拿它显示个总数） */
+    val runningCount: Int get() = states.values.count { it.running }
+
+    /* ================= 写 ================= */
+
+    fun begin(convId: String) {
+        val now = System.currentTimeMillis()
+        states = states + (convId to State(true, convId, "在想…", now, 0L))
+        streams = streams + (convId to Stream.EMPTY)
+        results = results - convId
     }
 
-    /** 流式的中间记录：工具步骤（界面实时显示） */
-    var streamingSteps by mutableStateOf<List<String>>(emptyList())
-        private set
-
-    fun beginStream() {
-        streamingText = ""
-        streamingReasoning = ""
-        streamingRounds = 0
-        streamingSteps = emptyList()
-        runningTool = ""
-        runningToolHint = ""
-        toolProgress = -1f
-        toolSpeed = ""
+    fun progress(convId: String, text: String) {
+        val s = states[convId] ?: return
+        if (!s.running) return
+        states = states + (convId to s.copy(progress = text))
     }
 
-    fun appendReasoning(s: String) {
-        streamingReasoning += s
+    fun finish(result: Result) {
+        val id = result.conversationId
+        val s = states[id]
+        if (s != null) {
+            states = states + (id to s.copy(
+                running = false,
+                progress = "",
+                finishedAt = System.currentTimeMillis(),
+            ))
+        }
+        results = results + (id to result)
     }
 
-    fun appendText(s: String) {
-        streamingText += s
-    }
-
-    fun setRounds(n: Int) {
-        streamingRounds = n
-    }
-
-    fun addStep(line: String) {
-        streamingSteps = streamingSteps + line
+    /** 界面把结果取走（取完就不再重复弹） */
+    fun takeResult(convId: String): Result? {
+        val r = results[convId] ?: return null
+        results = results - convId
+        return r
     }
 
     /**
-     * 有个危险动作正等着用户点。
-     *
-     * 任务跑在服务里，弹窗归界面管 —— 所以中间得有这么个槽：
-     * 服务把"要确认什么"放这儿然后挂起，界面看到就弹窗，
-     * 用户点完把答案塞回去。
+     * 手动叫停某个会话。
      */
+    fun cancel(convId: String) {
+        val s = states[convId] ?: return
+        if (!s.running) return
+        states = states + (convId to s.copy(
+            running = false, progress = "", finishedAt = System.currentTimeMillis()
+        ))
+        results = results + (convId to Result(
+            conversationId = convId,
+            reply = "",
+            ok = false,
+            error = "你自己叫停了这次任务",
+        ))
+    }
+
+    /* ---------- 流式内容的更新 ---------- */
+
+    fun appendReasoning(convId: String, s: String) {
+        val cur = streamOf(convId)
+        streams = streams + (convId to cur.copy(reasoning = cur.reasoning + s))
+    }
+
+    fun appendText(convId: String, s: String) {
+        val cur = streamOf(convId)
+        streams = streams + (convId to cur.copy(text = cur.text + s))
+    }
+
+    fun setRounds(convId: String, n: Int) {
+        val cur = streamOf(convId)
+        streams = streams + (convId to cur.copy(rounds = n))
+    }
+
+    fun addStep(convId: String, line: String) {
+        val cur = streamOf(convId)
+        streams = streams + (convId to cur.copy(steps = cur.steps + line))
+    }
+
+    fun setRunningTool(convId: String, label: String, hint: String) {
+        val cur = streamOf(convId)
+        streams = streams + (convId to cur.copy(
+            tool = label, toolHint = hint, progress = -1f, speed = ""
+        ))
+    }
+
+    fun setToolProgress(convId: String, p: Float) {
+        val cur = streamOf(convId)
+        streams = streams + (convId to cur.copy(progress = p.coerceIn(0f, 1f)))
+    }
+
+    fun setToolSpeed(convId: String, s: String) {
+        val cur = streamOf(convId)
+        streams = streams + (convId to cur.copy(speed = s))
+    }
+
+    /** 清掉某个会话的流式中间态（跑完了调） */
+    fun clearStream(convId: String) {
+        streams = streams - convId
+    }
+
+    /** 会话被删掉时清干净 */
+    fun forget(convId: String) {
+        states = states - convId
+        results = results - convId
+        streams = streams - convId
+    }
+
+    /* ---------------- 危险确认（本来就按会话分） ---------------- */
+
     var pendingConfirm by mutableStateOf<ConfirmRequest?>(null)
 
     data class ConfirmRequest(
+        val conversationId: String,
         val hit: DangerGuard.Hit,
         val answer: kotlinx.coroutines.CompletableDeferred<Boolean>,
     )
 
-    /** 界面点了之后调它 */
     fun answerConfirm(ok: Boolean) {
         pendingConfirm?.answer?.complete(ok)
         pendingConfirm = null
     }
 
-    /** 跑完的结果先堆在这儿，界面回来时取走 */
-    var pendingResult by mutableStateOf<Result?>(null)
-        private set
-
-    fun begin(conversationId: String) {
-        state = State(
-            running = true,
-            conversationId = conversationId,
-            progress = "在想…",
-            startedAt = System.currentTimeMillis(),
-        )
-        pendingResult = null
-    }
-
-    fun progress(text: String) {
-        if (!state.running) return
-        state = state.copy(progress = text)
-    }
-
-    fun finish(result: Result) {
-        state = state.copy(
-            running = false,
-            progress = "",
-            finishedAt = System.currentTimeMillis(),
-        )
-        pendingResult = result
-    }
-
-    /** 界面把结果取走（取完就不再重复弹） */
-    fun takeResult(): Result? {
-        val r = pendingResult
-        pendingResult = null
-        return r
-    }
-
-    /**
-     * 手动叫停。
-     *
-     * 卡住的时候总得有条路 —— 用户点了「停」就把状态收掉，
-     * 服务那边下一次 onProgress 会因为 `!state.running` 直接跳过。
-     */
-    fun cancel() {
-        if (!state.running) return
-        val convId = state.conversationId
-        state = state.copy(running = false, progress = "", finishedAt = System.currentTimeMillis())
-        pendingResult = Result(
-            conversationId = convId,
-            reply = "",
-            toolLog = emptyList(),
-            thinkRounds = 0,
-            usage = AgentApi.Usage(),
-            ok = false,
-            error = "你自己叫停了这次任务",
-        )
-    }
-
-    /** 这个任务跑了多久了（毫秒） */
-    val runningForMs: Long
-        get() = if (state.running && state.startedAt > 0) {
-            System.currentTimeMillis() - state.startedAt
-        } else {
-            0L
-        }
-
-    val elapsedMs: Long
-        get() = if (state.running && state.startedAt > 0) {
-            System.currentTimeMillis() - state.startedAt
-        } else {
-            0L
-        }
-
     /* ---------------- 开关 ---------------- */
 
     private var sp: android.content.SharedPreferences? = null
 
-    /** 后台留存：用前台服务托着，切页/切后台都不断 */
     var keepAlive by mutableStateOf(true)
         private set
 
-    /** 开机自启（把服务拉起来） */
     var bootStart by mutableStateOf(false)
         private set
 

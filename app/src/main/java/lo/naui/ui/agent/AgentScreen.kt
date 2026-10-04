@@ -153,7 +153,9 @@ fun AgentScreen(
     var pending by remember { mutableStateOf<List<ChatAttachment>>(emptyList()) }
     var draft by remember { mutableStateOf("") }
     // 这两个改成跟着后台任务走
-    val task = lo.naui.agent.AgentTaskStore.state
+    // 读**当前这个会话**的状态 —— 别的会话在跑不影响这儿
+    val convKey = AgentStore.activeConvId
+    val task = lo.naui.agent.AgentTaskStore.stateOf(convKey)
     val sending = task.running
     var progress by remember { mutableStateOf("") }
     LaunchedEffect(task.progress) { progress = task.progress }
@@ -231,7 +233,7 @@ fun AgentScreen(
     LaunchedEffect(Unit) {
         AgentTaskStore.init(ctx)
         // 回来的时候如果已经有结果在等着，取走
-        AgentTaskStore.takeResult()?.let { r ->
+        AgentTaskStore.takeResult(AgentStore.activeConvId.orEmpty())?.let { r ->
             if (r.conversationId == AgentStore.activeConvId) {
                 val text = if (r.ok) r.reply else "出错了：" + r.error
                 val next = messages + UiMessage(
@@ -258,17 +260,17 @@ fun AgentScreen(
         tooLong = false
         if (sending) {
             kotlinx.coroutines.delay(4 * 60 * 1000L)
-            if (lo.naui.agent.AgentTaskStore.state.running) tooLong = true
+            if (lo.naui.agent.AgentTaskStore.stateOf(convKey).running) tooLong = true
         }
     }
 
     // 任务跑完了主动来取一次（不用退出去再进）
-    val taskState = AgentTaskStore.state
+    val taskState = AgentTaskStore.stateOf(convKey)
     LaunchedEffect(taskState.running, taskState.finishedAt) {
         if (!taskState.running) {
-            AgentTaskStore.takeResult()?.let { r ->
-                if (r.conversationId == AgentStore.activeConvId) {
+            AgentTaskStore.takeResult(AgentStore.activeConvId.orEmpty())?.let { r ->
                     val text = if (r.ok) r.reply else "出错了：" + r.error
+                    lo.naui.agent.AgentTaskStore.clearStream(AgentStore.activeConvId.orEmpty())
                     val next = messages + UiMessage(
                         key = nextKey(),
                         role = "assistant",
@@ -284,7 +286,6 @@ fun AgentScreen(
                     messages = next
                     persist(next)
                 }
-            }
         }
     }
 
@@ -420,7 +421,7 @@ fun AgentScreen(
                     }
                     // 正在生成的那条：边想边长，停止按钮去掉了
                     if (sending) {
-                        item(key = "__streaming__") { StreamingBubble() }
+                        item(key = "__streaming__") { StreamingBubble(convKey) }
                     }
                 }
             }
@@ -1096,15 +1097,17 @@ private fun StepList(steps: List<String>) {
  * 一边生成一边长，思考内容在专门的玻璃框里实时刷新。
  */
 @Composable
-private fun StreamingBubble() {
-    val reasoning = lo.naui.agent.AgentTaskStore.streamingReasoning
-    val text = lo.naui.agent.AgentTaskStore.streamingText
-    val rounds = lo.naui.agent.AgentTaskStore.streamingRounds
-    val steps = lo.naui.agent.AgentTaskStore.streamingSteps
-    val runningTool = lo.naui.agent.AgentTaskStore.runningTool
-    val runningToolHint = lo.naui.agent.AgentTaskStore.runningToolHint
-    val toolProgress = lo.naui.agent.AgentTaskStore.toolProgress
-    val toolSpeed = lo.naui.agent.AgentTaskStore.toolSpeed
+private fun StreamingBubble(convId: String?) {
+    // 按会话取 —— 切到 B 会话时不会显示 A 的思考内容
+    val st = lo.naui.agent.AgentTaskStore.streamOf(convId)
+    val reasoning = st.reasoning
+    val text = st.text
+    val rounds = st.rounds
+    val steps = st.steps
+    val runningTool = st.tool
+    val runningToolHint = st.toolHint
+    val toolProgress = st.progress
+    val toolSpeed = st.speed
     val shape = RoundedCornerShape(16.dp)
 
     var shown by remember { mutableStateOf(false) }

@@ -30,7 +30,15 @@ import kotlinx.coroutines.launch
 class AgentTaskService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var job: Job? = null
+
+    /**
+     * 每个会话一个协程。
+     *
+     * 以前是单个 `job`，来新任务就 `job?.cancel()` ——
+     * 结果在 A 会话思考时切到 B 发消息，A 直接被掐了。
+     * 用户要的是**两边各跑各的**，所以改成按会话存。
+     */
+    private val jobs = java.util.concurrent.ConcurrentHashMap<String, Job>()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -43,13 +51,24 @@ class AgentTaskService : Service() {
         when (intent?.action) {
             ACTION_RUN -> {
                 startForeground(NOTIFY_ID, buildNotification("正在想…"))
-                job?.cancel()
-                job = scope.launch { runTask(intent) }
+                val conv = intent.getStringExtra(EXTRA_CONV).orEmpty()
+                // **不 cancel 别人** —— 各跑各的
+                jobs[conv]?.cancel()
+                jobs[conv] = scope.launch {
+                    try {
+                        runTask(intent)
+                    } finally {
+                        jobs.remove(conv)
+                        // 一个都不剩了就撤，别一直占着通知
+                        if (jobs.isEmpty()) stopSelf()
+                    }
+                }
             }
 
             ACTION_STOP -> {
-                job?.cancel()
-                stopSelf()
+                val conv = intent.getStringExtra(EXTRA_CONV).orEmpty()
+                if (conv.isBlank()) jobs.values.forEach { it.cancel() } else jobs[conv]?.cancel()
+                if (jobs.isEmpty()) stopSelf()
             }
 
             else -> startForeground(NOTIFY_ID, buildNotification("待命"))
@@ -71,8 +90,6 @@ class AgentTaskService : Service() {
         ChatDb.init(this)
         val history = ChatDb.load(convId).map { ChatMessage(it.role, it.text) }
 
-        AgentTaskStore.beginStream()
-
         val result = AgentChat.run(
             ctx = this,
             system = system,
@@ -81,27 +98,28 @@ class AgentTaskService : Service() {
             maxTokens = maxTokens,
             temperature = temperature,
             onProgress = { p ->
-                AgentTaskStore.progress(p)
+                AgentTaskStore.progress(convId, p)
                 notify(buildNotification(p))
             },
-            // 边想边说：三种增量分别往 Store 上堆，界面实时读
-            onReasoning = { r -> AgentTaskStore.appendReasoning(r) },
-            onDelta = { d -> AgentTaskStore.appendText(d) },
-            onRound = { n -> AgentTaskStore.setRounds(n) },
+            // 边想边说：三种增量分别往 Store 上堆，界面实时读。
+            // 都带 convId —— 这样切到别的会话时，这里的更新不会串台。
+            onReasoning = { r -> AgentTaskStore.appendReasoning(convId, r) },
+            onDelta = { d -> AgentTaskStore.appendText(convId, d) },
+            onRound = { n -> AgentTaskStore.setRounds(convId, n) },
             // 危险动作：把请求挂到 Store 上，等界面弹窗让用户点
             askUser = { hit ->
                 val gate = kotlinx.coroutines.CompletableDeferred<Boolean>()
-                AgentTaskStore.pendingConfirm = AgentTaskStore.ConfirmRequest(hit, gate)
-                AgentTaskStore.progress("等你确认：" + hit.category.label)
+                AgentTaskStore.pendingConfirm = AgentTaskStore.ConfirmRequest(convId, hit, gate)
+                AgentTaskStore.progress(convId, "等你确认：" + hit.category.label)
                 notify(buildNotification("等你确认：" + hit.category.label))
 
                 // 最多等 90 秒 —— 用户可能压根没看手机，别一直吊着
                 val ok = kotlinx.coroutines.withTimeoutOrNull(90_000L) { gate.await() } ?: false
                 AgentTaskStore.pendingConfirm = null
                 if (ok) {
-                    AgentTaskStore.progress("你同意了，继续…")
+                    AgentTaskStore.progress(convId, "你同意了，继续…")
                 } else {
-                    AgentTaskStore.progress("没等到确认，跳过这个动作")
+                    AgentTaskStore.progress(convId, "没等到确认，跳过这个动作")
                 }
                 ok
             },
@@ -147,7 +165,7 @@ class AgentTaskService : Service() {
             }
         } finally {
             // 不管中间怎么炸的，状态一定要收尾 —— 不然界面就永远停在"在想"
-            if (AgentTaskStore.state.running) {
+            if (AgentTaskStore.stateOf(convId).running) {
                 AgentTaskStore.finish(
                     AgentTaskStore.Result(
                         conversationId = convId,
@@ -215,7 +233,8 @@ class AgentTaskService : Service() {
     }
 
     override fun onDestroy() {
-        job?.cancel()
+        jobs.values.forEach { it.cancel() }
+        jobs.clear()
         scope.cancel()
         super.onDestroy()
     }

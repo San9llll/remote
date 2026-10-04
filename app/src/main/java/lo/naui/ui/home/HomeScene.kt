@@ -62,9 +62,16 @@ fun SceneHero(
             .then(modifier)
             .clip(shape),
     ) {
-        if (wallpaper != null) {
+        // Crossfade：换大图的时候淡过去，不是啪一下跳。
+        // 用户要的"上滑刷新时要渐变"就是它。
+        androidx.compose.animation.Crossfade(
+            targetState = wallpaper,
+            animationSpec = androidx.compose.animation.core.tween(420),
+            label = "hero_wall",
+        ) { bmp ->
+        if (bmp != null) {
             Image(
-                bitmap = wallpaper,
+                bitmap = bmp,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
@@ -102,6 +109,7 @@ fun SceneHero(
                         )
                     )
             )
+        }
         }
 
 

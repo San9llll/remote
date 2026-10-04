@@ -154,9 +154,15 @@ fun HomeSceneRail(
     Box(modifier) {
         // ---- 导轨自己的背景 ----
         Box(Modifier.fillMaxSize()) {
-            if (wallpaper != null) {
+            // 跟 hero 一样淡过去 —— 换大图时两边一起渐变才不打架
+            androidx.compose.animation.Crossfade(
+                targetState = wallpaper,
+                animationSpec = androidx.compose.animation.core.tween(420),
+                label = "rail_wall",
+            ) { bmp ->
+            if (bmp != null) {
                 Image(
-                    bitmap = wallpaper,
+                    bitmap = bmp,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
@@ -180,6 +186,7 @@ fun HomeSceneRail(
                         )
                     )
                 )
+            }
             }
             // 明暗决定压多黑
             Box(

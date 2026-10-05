@@ -79,19 +79,19 @@ object AgentChat {
             val tools = AgentTools.toolsFor(env)
             // ---- 组历史 ----
             //
-            // 这里有几个讲究，都是"模型听不懂对话"的常见原因：
-            //   · 空消息**直接跳过** —— 以前拿"（空）"占位，模型会把它当真的话来回
-            //   · 带上图（content 用数组形式）—— 以前图片根本没传上去
-            //   · 只保留最近 N 条 —— 太长会超上下文，模型反而抓不住重点
-            val messages = JSONArray()
-            val recent = if (history.size > MAX_HISTORY) history.takeLast(MAX_HISTORY) else history
-
-            recent.forEach { m ->
-                // 空消息别传
+            // 照 astrbot 那套来的（`astrbot/core/agent/context/`）。三件事：
+            //
+            //   ① 空消息**直接跳过** —— 以前拿"（空）"占位，模型会把它当真的话来回
+            //   ② 带图的消息 content 用数组 [ {text}, {image_url} ]
+            //   ③ 组完之后过一遍 **AgentContext.truncateByHalving**，
+            //      它会裁掉一半 + 修 tool 配对（这个是 OpenAI 规范硬要求，
+            //      Gemini 尤其严格；我们以前完全没做，很可能就是
+            //      "模型理解有问题"的原因之一）
+            val raw = mutableListOf<JSONObject>()
+            history.forEach { m ->
                 if (m.text.isBlank() && m.images.isEmpty()) return@forEach
 
                 if (m.role == "user" && m.images.isNotEmpty()) {
-                    // 带图的：content 得是数组 [ {text}, {image_url} ]
                     val parts = JSONArray()
                     if (m.text.isNotBlank()) {
                         parts.put(JSONObject().put("type", "text").put("text", m.text))
@@ -103,11 +103,15 @@ object AgentChat {
                                 .put("image_url", JSONObject().put("url", url))
                         )
                     }
-                    messages.put(JSONObject().put("role", "user").put("content", parts))
+                    raw += JSONObject().put("role", "user").put("content", parts)
                 } else {
-                    messages.put(JSONObject().put("role", m.role).put("content", m.text))
+                    raw += JSONObject().put("role", m.role).put("content", m.text)
                 }
             }
+            // 裁 + 修序列
+            val fixed = AgentContext.truncateByHalving(raw)
+            val messages = JSONArray()
+            fixed.forEach { messages.put(it) }
 
             val log = mutableListOf<String>()
             val steps = mutableListOf<ToolStep>()

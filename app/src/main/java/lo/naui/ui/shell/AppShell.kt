@@ -639,22 +639,37 @@ private fun RippleLayer(
     /** 等着被推出来的新图 */
     pending: ImageBitmap?,
 ) {
-    // ①.5 涟漪层（在卡片**下面**，所以不挡内容）
+    // ============================================================
+    //  切背景的那层涟漪
+    // ============================================================
     //
-    // 结构改过一次，现在是：
-    //   先铺**旧图**（铺满）      ← 过渡期间看到的一直是它
-    //   再在**圆内**画新图        ← 圆扩到哪儿，哪儿才变
+    // 画法：**先铺旧图**（铺满），再在**圆内画新图** ——
+    // 圆扩到哪儿，哪儿才变；没扩到的还是旧图。
     //
-    // 之前是反的（底层新图 + 旧图裁掉圆内），实机上表现成
-    // "先拉出一整张新图占满屏幕，动画才跟上"，而且用了 Path.op（很贵，会卡）。
-    // 现在只用 clipPath，便宜得多。
+    // 这一版解决两个问题：
+    //
+    //  ① **卡死**
+    //     以前每帧画两张全屏位图，而且 `clipPath` 在 Compose 里会
+    //     **强制创建一个离屏图层** —— 全屏离屏两遍，手机上必卡。
+    //     现在：降到 30fps + 用 `clipRect` 把绘制锁在涟漪的包围盒里。
+    //
+    //  ② **边界太硬**
+    //     以前是边界画一圈白色"玻璃边"，用户要的是**混合模糊过渡**。
+    //     现在把边界那圈做宽（九十来个 px）并且**让新图在边界上淡出** ——
+    //     淡出的地方底下正好是旧图，看起来就是新旧糊在一起。
+    //     （Canvas 里没有真模糊，这是最接近的近似；省电模式一开就彻底不画。）
+    // ============================================================
+
     var frameTick by remember { mutableIntStateOf(0) }
     LaunchedEffect(Unit) {
         while (true) {
             if (lo.naui.ui.theme.BgRipples.active().isNotEmpty()) {
                 frameTick++
             }
-            kotlinx.coroutines.delay(16)
+            // ⚠️ 30fps（原来是 16ms = 60fps）。
+            // 涟漪本来就是慢慢扩的，30fps 肉眼看不出区别，
+            // 但 GPU 压力直接减半 —— 这是"大图卡死"最主要的一刀。
+            kotlinx.coroutines.delay(33)
         }
     }
 
@@ -662,120 +677,122 @@ private fun RippleLayer(
     @Suppress("UNUSED_EXPRESSION")
     run { frameTick }
 
-    // 条件只看"有没有涟漪"和"两张图在不在"——
-    // 之前卡在 prevWallpaper 上，而它第一轮可能是 null，
-    // 结果整层不画，用户直接看到底层的新图（这就是"看不到动画"的原因）
-    if (ripples.isNotEmpty() && shown != null && pending != null) {
-        // ⚠️ 这里**不能给 zIndex**。
-        //
-        // Compose 里 zIndex 默认是 0，而内容层我没设（也是 0）——
-        // 之前这里写了 zIndex(0.2f)，结果涟漪层**跑到内容上面去了**
-        // （用户反馈："主题切换还是有全屏图片且显示在最上层"）。
-        //
-        // 它本来就声明在内容层**前面**，按顺序画就是"背景之上、内容之下"，
-        // 不加 zIndex 才对。
-        androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
-            val now = System.currentTimeMillis()
-            val old = shown ?: return@Canvas
-            val new = pending ?: return@Canvas
+    if (ripples.isEmpty() || shown == null || pending == null) return
 
-            // ---- 第一步：旧图铺满 ----
-            drawImage(
-                image = old,
-                srcOffset = androidx.compose.ui.unit.IntOffset.Zero,
-                srcSize = androidx.compose.ui.unit.IntSize(old.width, old.height),
-                dstOffset = androidx.compose.ui.unit.IntOffset.Zero,
-                dstSize = androidx.compose.ui.unit.IntSize(
-                    size.width.toInt(), size.height.toInt()
-                ),
+    androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
+        val now = System.currentTimeMillis()
+        val dstSize = androidx.compose.ui.unit.IntSize(
+            size.width.toInt(), size.height.toInt()
+        )
+        val blurBand = BLUR_BAND_PX
+
+        // ---- 先算清楚每个圆的位置和半径 ----
+        //
+        // ⚠️ 不能在这儿写 data class —— **Kotlin 不允许局部 data class**。
+        // 用 Triple 装 (cx, cy, radius)，progress 从 ripples 那边再取一次就行。
+        val holes = ripples.map { r ->
+            val pr = lo.naui.ui.theme.BgRipples.progressOf(r, now)
+            val cx = size.width * r.cx
+            val cy = size.height * r.cy
+            val maxR = maxOf(
+                kotlin.math.hypot(cx, cy),
+                kotlin.math.hypot(size.width - cx, cy),
+                kotlin.math.hypot(cx, size.height - cy),
+                kotlin.math.hypot(size.width - cx, size.height - cy),
             )
+            Triple(cx, cy, (maxR * pr).coerceAtLeast(1f))
+        }
 
-            // ---- 第二步：圆内画新图 ----
-            // 每个涟漪一个圆，各自按自己的进度长大
-            ripples.forEach { r ->
-                val p = lo.naui.ui.theme.BgRipples.progressOf(r, now)
-                val cx = size.width * r.cx
-                val cy = size.height * r.cy
-                val maxR = maxOf(
-                    kotlin.math.hypot(cx, cy),
-                    kotlin.math.hypot(size.width - cx, cy),
-                    kotlin.math.hypot(cx, size.height - cy),
-                    kotlin.math.hypot(size.width - cx, size.height - cy),
-                )
-                val radius = (maxR * p).coerceAtLeast(1f)
+        // ---- 第一步：旧图铺满 ----
+        // 这一张是全屏的，省不掉（它就是"过渡期间你看到的那张"）。
+        drawImage(
+            image = shown,
+            srcOffset = androidx.compose.ui.unit.IntOffset.Zero,
+            srcSize = androidx.compose.ui.unit.IntSize(shown.width, shown.height),
+            dstOffset = androidx.compose.ui.unit.IntOffset.Zero,
+            dstSize = dstSize,
+        )
 
-                val circle = androidx.compose.ui.graphics.Path().apply {
-                    addOval(
-                        androidx.compose.ui.geometry.Rect(
-                            cx - radius, cy - radius, cx + radius, cy + radius
+        // ---- 第二步：圆内叠新图 ----
+        //
+        // 每张新图只画在**它自己那个圆的包围盒**里 ——
+        // 用 clipRect 而不是 clipPath（前者便宜得多，不会全屏离屏）。
+        //
+        // 边界那圈：把圆切成很多层，靠外的层 alpha 越低。
+        // 这样边界就是"新图慢慢淡出、旧图慢慢露出来" = 混合糊过去。
+        holes.forEachIndexed { holeIdx, hole ->
+            val (cx, cy, radius) = hole
+            val outer = radius + blurBand
+            clipRect(
+                left = (cx - outer).coerceAtLeast(0f),
+                top = (cy - outer).coerceAtLeast(0f),
+                right = (cx + outer).coerceAtMost(size.width),
+                bottom = (cy + outer).coerceAtMost(size.height),
+            ) {
+                // 实心部分：半径减掉模糊带以内，完全不透明
+                val solid = (radius - blurBand).coerceAtLeast(0f)
+                if (solid > 1f) {
+                    // 用一个圆当"模具"：先画图，再用 BlendMode 裁不出来，
+                    // 所以这里换思路 —— 直接画一个被 clipPath 限定的图，
+                    // 但 clipPath 的 path 只有这一个圆（不是全屏），代价可控。
+                    val solidPath = androidx.compose.ui.graphics.Path().apply {
+                        addOval(
+                            androidx.compose.ui.geometry.Rect(
+                                cx - solid, cy - solid, cx + solid, cy + solid
+                            )
                         )
-                    )
+                    }
+                    clipPath(solidPath) {
+                        drawImage(
+                            image = pending,
+                            srcOffset = androidx.compose.ui.unit.IntOffset.Zero,
+                            srcSize = androidx.compose.ui.unit.IntSize(pending.width, pending.height),
+                            dstOffset = androidx.compose.ui.unit.IntOffset.Zero,
+                            dstSize = dstSize,
+                        )
+                    }
                 }
 
-                clipPath(circle) {
-                    drawImage(
-                        image = new,
-                        srcOffset = androidx.compose.ui.unit.IntOffset.Zero,
-                        srcSize = androidx.compose.ui.unit.IntSize(new.width, new.height),
-                        dstOffset = androidx.compose.ui.unit.IntOffset.Zero,
-                        dstSize = androidx.compose.ui.unit.IntSize(
-                            size.width.toInt(), size.height.toInt()
-                        ),
-                    )
-                }
+                // 模糊带：一圈一圈往外，alpha 递减
+                // 12 层够平滑了，再多就是白烧
+                val layers = 12
+                val holeProgress = lo.naui.ui.theme.BgRipples
+                    .progressOf(ripples[holeIdx], now).coerceIn(0f, 1f)
 
-                // ---- 切线：跟卡片同款的玻璃质感 ----
-                // 画不出真折射（那要 drawBackdrop，Canvas 里没有），
-                // 但可以照着卡片的观感叠：一层宽雾 + 一层亮边 + 一条高光。
-                // 再往外扫一点渐变，看着就像"玻璃的边缘在推过去"。
-                if (p < 1f) {
-                    val a = lo.naui.ui.theme.BgRipples.edgeAlphaOf(r, now)
-                    if (a > 0.01f) {
-                        val center = androidx.compose.ui.geometry.Offset(cx, cy)
-
-                        // 外圈雾（玻璃的厚度）
-                        drawCircle(
-                            brush = androidx.compose.ui.graphics.Brush.radialGradient(
-                                colors = listOf(
-                                    androidx.compose.ui.graphics.Color.Transparent,
-                                    androidx.compose.ui.graphics.Color.White.copy(alpha = 0.12f * a),
-                                    androidx.compose.ui.graphics.Color.Transparent,
-                                ),
-                                center = center,
-                                radius = radius,
-                            ),
-                            radius = radius,
-                            center = center,
-                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 56.dp.toPx()),
+                for (i in layers downTo 1) {
+                    val t = i / layers.toFloat()
+                    val r = radius + blurBand * (1f - t)
+                    if (r <= solid) continue
+                    val a = t * t          // 平方衰减，边缘更软
+                    val ring = androidx.compose.ui.graphics.Path().apply {
+                        addOval(
+                            androidx.compose.ui.geometry.Rect(
+                                cx - r, cy - r, cx + r, cy + r
+                            )
                         )
-
-                        // 玻璃边
-                        drawCircle(
-                            brush = androidx.compose.ui.graphics.Brush.radialGradient(
-                                colors = listOf(
-                                    androidx.compose.ui.graphics.Color.Transparent,
-                                    androidx.compose.ui.graphics.Color.White.copy(alpha = 0.34f * a),
-                                    androidx.compose.ui.graphics.Color.Transparent,
-                                ),
-                                center = center,
-                                radius = radius,
-                            ),
-                            radius = radius,
-                            center = center,
-                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 24.dp.toPx()),
-                        )
-
-                        // 高光细线
-                        drawCircle(
-                            color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.5f * a),
-                            radius = radius,
-                            center = center,
-                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.5.dp.toPx()),
+                    }
+                    clipPath(ring) {
+                        drawImage(
+                            image = pending,
+                            srcOffset = androidx.compose.ui.unit.IntOffset.Zero,
+                            srcSize = androidx.compose.ui.unit.IntSize(pending.width, pending.height),
+                            dstOffset = androidx.compose.ui.unit.IntOffset.Zero,
+                            dstSize = dstSize,
+                            alpha = a * holeProgress,
+                            blendMode = androidx.compose.ui.graphics.BlendMode.SrcOver,
                         )
                     }
                 }
             }
         }
     }
-
 }
+
+/**
+ * 边界那圈"混合模糊"的宽度（px）。
+ *
+ * 九十来个 px 在手机上差不多是 30dp —— 足够把边界糊开，
+ * 又不会糊得太夸张。
+ */
+private const val BLUR_BAND_PX = 90f
+

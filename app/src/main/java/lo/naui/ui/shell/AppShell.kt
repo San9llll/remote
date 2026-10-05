@@ -391,7 +391,15 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
             // 之前卡在 prevWallpaper 上，而它第一轮可能是 null，
             // 结果整层不画，用户直接看到底层的新图（这就是"看不到动画"的原因）
             if (ripples.isNotEmpty() && shownWallpaper != null && pendingWallpaper != null) {
-                androidx.compose.foundation.Canvas(Modifier.fillMaxSize().zIndex(0.2f)) {
+                // ⚠️ 这里**不能给 zIndex**。
+                //
+                // Compose 里 zIndex 默认是 0，而内容层我没设（也是 0）——
+                // 之前这里写了 zIndex(0.2f)，结果涟漪层**跑到内容上面去了**
+                // （用户反馈："主题切换还是有全屏图片且显示在最上层"）。
+                //
+                // 它本来就声明在内容层**前面**，按顺序画就是"背景之上、内容之下"，
+                // 不加 zIndex 才对。
+                androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
                     val now = System.currentTimeMillis()
                     val old = shownWallpaper ?: return@Canvas
                     val new = pendingWallpaper ?: return@Canvas

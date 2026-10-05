@@ -226,9 +226,13 @@ object AgentChat {
         if (toolName != AgentTools.SHELL) {
             return when (toolName) {
                 AgentTools.READ -> "正在读文件"
+                AgentTools.READ_MANY -> "正在批量读文件"
                 AgentTools.WRITE -> "正在写文件"
                 AgentTools.LIST -> "正在看目录"
                 AgentTools.DEVICE -> "正在问设备信息"
+                AgentTools.FIND -> "正在找文件"
+                AgentTools.GREP -> "正在搜内容"
+                AgentTools.BATCH -> "正在批量执行"
                 else -> "正在干活"
             }
         }
@@ -248,6 +252,10 @@ object AgentChat {
     /** 工具的内部名字 → 人话 */
     private fun friendlyName(name: String): String = when (name) {
         AgentTools.SHELL -> "执行命令"
+        AgentTools.BATCH -> "批量执行"
+        AgentTools.READ_MANY -> "批量读文件"
+        AgentTools.FIND -> "找文件"
+        AgentTools.GREP -> "搜内容"
         AgentTools.READ -> "读文件"
         AgentTools.WRITE -> "写文件"
         AgentTools.LIST -> "看目录"

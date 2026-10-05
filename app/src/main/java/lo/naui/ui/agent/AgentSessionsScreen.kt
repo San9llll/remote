@@ -1,5 +1,11 @@
 package lo.naui.ui.agent
 
+import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -47,6 +53,11 @@ private val stamp = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
  */
 @Composable
 fun AgentSessionsScreen(onBack: () -> Unit = {}) {
+    val rctx = androidx.compose.ui.platform.LocalContext.current
+    // 正在改名的那个会话
+    var renaming by remember { mutableStateOf<lo.naui.agent.Conversation?>(null) }
+    // 改完让它重画
+    var tick by remember { mutableStateOf(0) }
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     ChatDb.init(ctx)
@@ -110,12 +121,18 @@ fun AgentSessionsScreen(onBack: () -> Unit = {}) {
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Column(Modifier.weight(1f)) {
+                            // 标题点了就改名（用户要的"会话标题可修改"）。
+                            // 这个 clickable 在 Text 上，会吃掉点击 —— 不会连带把会话打开。
                             Text(
                                 c.title,
                                 fontSize = 14.sp,
                                 fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
                                 color = if (active) MiuixTheme.colorScheme.primary
                                 else MiuixTheme.colorScheme.onSurface,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable { renaming = c }
+                                    .padding(vertical = 2.dp, horizontal = 2.dp),
                             )
                             Text(
                                 if (c.updatedAt > 0) stamp.format(Date(c.updatedAt)) else "还没聊过",
@@ -142,6 +159,111 @@ fun AgentSessionsScreen(onBack: () -> Unit = {}) {
                                 .padding(8.dp),
                         )
                     }
+                }
+            }
+        }
+    }
+
+    // 改名弹窗
+    renaming?.let { conv ->
+        RenameDialog(
+            current = conv.title,
+            onDismiss = { renaming = null },
+            onSave = { newName ->
+                lo.naui.agent.ChatDb.rename(conv.id, newName)
+                renaming = null
+                tick++
+            },
+        )
+    }
+    @Suppress("UNUSED_EXPRESSION")
+    run { tick }
+
+}
+
+
+/**
+ * 改会话标题的弹窗。
+ *
+ * 用户要求"会话标题可修改" —— 自动生成的是取第一条消息的头几个字，
+ * 经常认不出是哪次聊的。
+ */
+@Composable
+private fun RenameDialog(
+    current: String,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit,
+) {
+    var text by remember { mutableStateOf(current) }
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.5f))
+            .clickable { onDismiss() },
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            Modifier
+                .padding(horizontal = 26.dp)
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(18.dp))
+                .background(MiuixTheme.colorScheme.surface)
+                .clickable(enabled = false) { }
+                .padding(18.dp),
+        ) {
+            Text("改个名字", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(12.dp))
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+            ) {
+                androidx.compose.foundation.text.BasicTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    textStyle = androidx.compose.ui.text.TextStyle(
+                        fontSize = 13.5.sp,
+                        color = MiuixTheme.colorScheme.onSurface,
+                    ),
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(
+                        MiuixTheme.colorScheme.primary
+                    ),
+                )
+                if (text.isEmpty()) {
+                    Text(
+                        "给这次对话起个名",
+                        fontSize = 13.sp,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    )
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(50))
+                        .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+                        .clickable { onDismiss() }
+                        .padding(vertical = 11.dp),
+                    contentAlignment = Alignment.Center,
+                ) { Text("算了", fontSize = 13.sp) }
+
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(50))
+                        .background(MiuixTheme.colorScheme.primary)
+                        .clickable { onSave(text) }
+                        .padding(vertical = 11.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("保存", fontSize = 13.sp, color = MiuixTheme.colorScheme.onPrimary)
                 }
             }
         }

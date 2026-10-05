@@ -138,6 +138,119 @@ object AgentRunner {
             }.getOrElse { ToolResult(false, "写失败：" + (it.message ?: "")) }
         }
 
+    /**
+     * 一次读多个文件。
+     *
+     * 为什么要它：以前 AI 想知道"这几个文件里都是什么"，只能一个个
+     * `read_file`，来回十几次。这个一次就搞定。
+     */
+    suspend fun readMany(
+        ctx: Context,
+        env: AgentEnv,
+        paths: List<String>,
+        maxBytesEach: Int = 60_000,
+    ): ToolResult = withContext(Dispatchers.IO) {
+        runCatching {
+            if (paths.isEmpty()) return@runCatching ToolResult(false, "没给路径")
+            val sb = StringBuilder()
+            paths.take(20).forEach { raw ->
+                val path = raw.trim()
+                if (path.isBlank()) return@forEach
+                val real = resolve(ctx, env, path)
+                if (real == null) {
+                    sb.append("=== ").append(path).append(" ===\n【沙箱不让碰】\n\n")
+                    return@forEach
+                }
+                val f = File(real)
+                sb.append("=== ").append(path).append(" ===\n")
+                when {
+                    !f.exists() -> sb.append("【不存在】\n")
+                    f.isDirectory -> sb.append("【是目录，用 list_dir】\n")
+                    else -> {
+                        val txt = runCatching { f.readText().take(maxBytesEach) }.getOrNull()
+                        sb.append(txt ?: "【读不出来（二进制或者没权限）】").append('\n')
+                    }
+                }
+                sb.append('\n')
+            }
+            ToolResult(true, clip(sb.toString()))
+        }.getOrElse { ToolResult(false, "批量读失败：" + (it.message ?: "")) }
+    }
+
+    /**
+     * 按文件名找。
+     *
+     * 用 `find`，但把常见坑（权限报错刷屏、符号链接绕圈）都处理了。
+     */
+    suspend fun findFiles(
+        ctx: Context,
+        env: AgentEnv,
+        root: String,
+        namePattern: String,
+        maxDepth: Int = 5,
+    ): ToolResult = withContext(Dispatchers.IO) {
+        runCatching {
+            val base = if (root.isBlank()) "." else root
+            // 用 -name 匹配，2>/dev/null 挡掉权限报错
+            val cmd = "find " + q(base) + " -maxdepth " + maxDepth.coerceIn(1, 12) +
+                " -name " + q(namePattern) + " 2>/dev/null | head -100"
+            val out = runLocalShell(ctx, guard(cmd, sandboxRoot(ctx)), sandboxRoot(ctx), null)
+                .ifBlank { Privilege.exec(ctx, cmd).orEmpty() }
+            ToolResult(true, clip(out.ifBlank { "（没找到）" }))
+        }.getOrElse { ToolResult(false, "找文件失败：" + (it.message ?: "")) }
+    }
+
+    /**
+     * 在文件内容里搜。
+     *
+     * 比让 AI 一个个 read_file 快得多。
+     */
+    suspend fun grepText(
+        ctx: Context,
+        env: AgentEnv,
+        root: String,
+        pattern: String,
+        fileGlob: String = "*",
+    ): ToolResult = withContext(Dispatchers.IO) {
+        runCatching {
+            val base = if (root.isBlank()) "." else root
+            val cmd = "grep -rn --include=" + q(fileGlob) + " -e " + q(pattern) + " " + q(base) +
+                " 2>/dev/null | head -80"
+            val out = runLocalShell(ctx, guard(cmd, sandboxRoot(ctx)), sandboxRoot(ctx), null)
+                .ifBlank { Privilege.exec(ctx, cmd).orEmpty() }
+            ToolResult(true, clip(out.ifBlank { "（没匹配到）" }))
+        }.getOrElse { ToolResult(false, "搜索失败：" + (it.message ?: "")) }
+    }
+
+    /**
+     * 一次跑多条命令（串行）。
+     *
+     * 这是**减少往返次数最有效的一招** ——
+     * AI 经常需要连着跑好几条（ls → cd → cat），一条条来的话
+     * 每轮都要跟模型来回一次。这个工具让它一次提交。
+     */
+    suspend fun batchShell(
+        ctx: Context,
+        env: AgentEnv,
+        commands: List<String>,
+        stopOnError: Boolean = false,
+    ): ToolResult = withContext(Dispatchers.IO) {
+        runCatching {
+            if (commands.isEmpty()) return@runCatching ToolResult(false, "没给命令")
+            val sb = StringBuilder()
+            commands.take(30).forEachIndexed { i, c ->
+                val cmd = c.trim()
+                if (cmd.isBlank()) return@forEachIndexed
+                sb.append("$ ").append(cmd).append('\n')
+                val one = shell(ctx, env, cmd, null)
+                sb.append(one.output).append('\n')
+                if (!one.ok && stopOnError) return@runCatching ToolResult(false, clip(sb.toString()))
+                sb.append('\n')
+            }
+            ToolResult(true, clip(sb.toString()))
+        }.getOrElse { ToolResult(false, "批量执行失败：" + (it.message ?: "")) }
+    }
+
     /** 列目录 */
     suspend fun listDir(ctx: Context, env: AgentEnv, path: String): ToolResult =
         withContext(Dispatchers.IO) {

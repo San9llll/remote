@@ -67,6 +67,7 @@ object AgentStore {
         maxTokens = p.getInt("max_tokens", 0)
         maxToolRounds = p.getInt("max_tool_rounds", 16)
         env = p.getString("env", AgentEnv.Sandbox.id)?.let { AgentEnv.of(it) } ?: AgentEnv.Sandbox
+        workspace = p.getString("workspace", "") ?: ""
         dangerPolicy = p.getString("danger", "ask")
             ?.let { id -> DangerGuard.Policy.entries.firstOrNull { it.id == id } }
             ?: DangerGuard.Policy.Ask
@@ -106,6 +107,20 @@ object AgentStore {
         sp?.edit()?.putInt("max_tokens", maxTokens)?.apply()
     }
 
+    /**
+     * 工作区。
+     *
+     * 用户要求"Agent 设置可设置工作区（文件夹），使 Agent 有存文件的地方，
+     * 所有会话共享" —— 就是一个所有会话都认的目录。
+     */
+    var workspace by mutableStateOf("")
+        private set
+
+    fun updateWorkspace(path: String) {
+        workspace = path.trim()
+        sp?.edit()?.putString("workspace", workspace)?.apply()
+    }
+
     /** 模型干活用的环境：沙箱 or 本机 root */
     var env by mutableStateOf(AgentEnv.Sandbox)
         private set
@@ -139,7 +154,13 @@ object AgentStore {
             ?: Persona.DEFAULT
 
     /** 当前生效的系统提示词 */
-    val systemPromptNow: String get() = persona.prompt + TOOL_NOTE
+    /**
+     * 当前生效的系统提示词 = 人格 + 工具说明（+ 工作区路径）。
+     */
+    val systemPromptNow: String get() = {
+        val ws = workspace
+        persona.prompt + TOOL_NOTE + (if (ws.isBlank()) "（没设）" else ws)
+    }
 
     /**
      * 不管人格写成什么样，末尾都接上这段。
@@ -163,7 +184,34 @@ object AgentStore {
 - 用户拒绝了某个动作，就换个安全的办法，或者跟他说清楚为什么要这么做
 - 别把"为了安全我不执行"当成回答
 
-关于下载（也是系统说明）：
+关于效率（也是系统说明，**这段很重要**）：
+
+用户反馈过"一次回答用了 200 多次思考和工具"。注意下面几条，能省掉大量来回：
+
+1. **需要连着做几步的时候，用 `batch_shell` 一次提交**
+   —— 别 `ls` 一次、`cat` 一次、`grep` 一次分开来，
+   每分一次就要跟模型来回一轮，很慢
+
+2. **想知道好几个文件里是什么 → 用 `read_many`**
+   —— 别一个个 `read_file`
+
+3. **不知道东西在哪 → 先用 `find_files` 或 `grep_text`**
+   —— 别一层层 `ls` 翻、别读一堆文件碰运气
+
+4. **同一件事别反复试**
+   —— 一条命令失败了，看清楚报错再改，别换个写法硬撞；
+      撞三次还不行就停下来跟用户说清楚
+
+5. **该收就收**
+   —— 事情做完了就回答，别"顺手再看一眼"、"顺便验证一下"地拖下去
+
+关于工作区（也是系统说明）：
+
+- 用户可以在 Agent 设置里指定一个**工作区文件夹**，所有会话共用。
+- 需要存东西的时候优先放那儿，别乱扔到系统目录。
+- 工作区路径见下面那行：
+
+【工作区】
 
 - 下大文件时**务必带上进度参数**，不然用户只能干等：
   · curl 加 `--progress-bar`（或者 `-#`）

@@ -48,6 +48,10 @@ private fun int(desc: String): JSONObject =
 object AgentTools {
 
     const val SHELL = "run_shell"
+    const val BATCH = "batch_shell"
+    const val READ_MANY = "read_many"
+    const val FIND = "find_files"
+    const val GREP = "grep_text"
     const val READ = "read_file"
     const val WRITE = "write_file"
     const val LIST = "list_dir"
@@ -82,6 +86,52 @@ object AgentTools {
             description = "列出一个目录里有什么",
             properties = JSONObject().put("path", str("目录路径")),
             required = listOf("path"),
+        ),
+        AgentTool(
+            name = BATCH,
+            description = "一次跑多条命令（串行执行，按顺序）。" +
+                "**需要连着做几步的时候优先用它** —— 比如 `ls` 看完再 `cat` 再 `grep`，" +
+                "分包发的话每一条都要跟模型来回一次，很慢。一次提交能省很多轮。",
+            properties = JSONObject()
+                .put("commands", JSONObject()
+                    .put("type", "array")
+                    .put("description", "要依次执行的命令列表")
+                    .put("items", JSONObject().put("type", "string")))
+                .put("stop_on_error", JSONObject()
+                    .put("type", "boolean")
+                    .put("description", "遇到失败就停，默认 false 继续跑")),
+            required = listOf("commands"),
+        ),
+        AgentTool(
+            name = READ_MANY,
+            description = "一次读多个文件的内容。想知道好几个文件里都是什么时用它，" +
+                "比一个个 read_file 快得多。最多 20 个。",
+            properties = JSONObject()
+                .put("paths", JSONObject()
+                    .put("type", "array")
+                    .put("description", "要读的文件路径列表")
+                    .put("items", JSONObject().put("type", "string"))),
+            required = listOf("paths"),
+        ),
+        AgentTool(
+            name = FIND,
+            description = "按**文件名**找文件。比如找所有 .log、所有 build.gradle.kts。" +
+                "不知道东西在哪的时候先用它，别一层层 ls 翻。",
+            properties = JSONObject()
+                .put("root", str("从哪儿开始找，默认当前目录"))
+                .put("name", str("文件名匹配，支持通配符，比如 *.kt、config.*"))
+                .put("max_depth", int("最多往下找几层，默认 5")),
+            required = listOf("name"),
+        ),
+        AgentTool(
+            name = GREP,
+            description = "在**文件内容**里搜关键词，返回匹配的行和行号。" +
+                "找"这东西在哪定义/在哪用到"就靠它，比读一堆文件快。",
+            properties = JSONObject()
+                .put("root", str("从哪个目录找，默认当前目录"))
+                .put("pattern", str("要找的内容（普通字符串，不是正则）"))
+                .put("file_glob", str("只搜哪些文件，默认 * ，比如 *.kt")),
+            required = listOf("pattern"),
         ),
         AgentTool(
             name = DEVICE,
@@ -146,6 +196,34 @@ object AgentTools {
         onLine: ((String) -> Unit)? = null,
     ): ToolResult = when (name) {
         SHELL -> AgentRunner.shell(ctx, env, args.optString("command", "").trim(), onLine)
+
+        BATCH -> {
+            val arr = args.optJSONArray("commands")
+            val list = mutableListOf<String>()
+            if (arr != null) for (i in 0 until arr.length()) arr.optString(i).takeIf { it.isNotBlank() }?.let { list += it }
+            AgentRunner.batchShell(ctx, env, list, args.optBoolean("stop_on_error", false))
+        }
+
+        READ_MANY -> {
+            val arr = args.optJSONArray("paths")
+            val list = mutableListOf<String>()
+            if (arr != null) for (i in 0 until arr.length()) arr.optString(i).takeIf { it.isNotBlank() }?.let { list += it }
+            AgentRunner.readMany(ctx, env, list)
+        }
+
+        FIND -> AgentRunner.findFiles(
+            ctx, env,
+            args.optString("root", ".").trim(),
+            args.optString("name", "*").trim(),
+            args.optInt("max_depth", 5),
+        )
+
+        GREP -> AgentRunner.grepText(
+            ctx, env,
+            args.optString("root", ".").trim(),
+            args.optString("pattern", "").trim(),
+            args.optString("file_glob", "*").trim(),
+        )
 
         READ -> AgentRunner.readFile(
             ctx, env,

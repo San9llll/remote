@@ -1384,6 +1384,23 @@ private fun ModelSheet(onDismiss: () -> Unit) {
     var msg by remember { mutableStateOf<String?>(null) }
     var editingPersona by remember { mutableStateOf<Persona?>(null) }
 
+    // 选工作区文件夹
+    val folderPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree(),
+    ) { uri ->
+        if (uri != null) {
+            // 持久化权限 —— 不然重启 App 就访问不了了
+            runCatching {
+                ctx.contentResolver.takePersistableUriPermission(
+                    uri,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                )
+            }
+            AgentStore.updateWorkspace(uri.toString())
+        }
+    }
+
     BottomSheet(title = "模型 · 人格 · 环境", onDismiss = onDismiss) {
         // 模型
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1582,6 +1599,53 @@ private fun ModelSheet(onDismiss: () -> Unit) {
                 )
             }
             Spacer(Modifier.height(4.dp))
+        }
+
+        Spacer(Modifier.height(16.dp))
+        // ---- 工作区 ----
+        // 用户要的"Agent 设置可设置工作区（文件夹），所有会话共享"
+        Text("工作区", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            if (AgentStore.workspace.isBlank()) "还没设。设了之后所有会话都往这儿存东西"
+            else AgentStore.workspace,
+            fontSize = 10.5.sp,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(Modifier.height(6.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box(
+                Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(50))
+                    .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.14f))
+                    .clickable {
+                        // 用系统目录选择器——这样能拿到 SAF 的目录权限，
+                        // 不然 /sdcard 下的东西 Android 10+ 是碰不了的
+                        folderPicker.launch(null)
+                    }
+                    .padding(vertical = 9.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    if (AgentStore.workspace.isBlank()) "选个文件夹" else "换一个",
+                    fontSize = 12.5.sp,
+                    color = MiuixTheme.colorScheme.primary,
+                )
+            }
+            if (AgentStore.workspace.isNotBlank()) {
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(50))
+                        .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+                        .clickable { AgentStore.updateWorkspace("") }
+                        .padding(vertical = 9.dp),
+                    contentAlignment = Alignment.Center,
+                ) { Text("清掉", fontSize = 12.5.sp) }
+            }
         }
 
         Spacer(Modifier.height(16.dp))

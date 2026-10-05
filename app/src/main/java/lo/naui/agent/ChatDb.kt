@@ -104,6 +104,20 @@ object ChatDb {
     private fun file(id: String): File? = dir?.let { File(it, id + ".json") }
 
     /** 用第一条用户消息当标题 */
+    /**
+     * 只改标题，不动消息内容。
+     *
+     * 用户要求"会话标题可修改" —— 自动生成的标题（取第一条消息前几个字）
+     * 经常不好认，让他自己能改。
+     */
+    fun rename(id: String, newTitle: String) {
+        runCatching {
+            val conv = load(id)
+            if (conv.isEmpty()) return
+            save(id, newTitle.trim().ifBlank { "新对话" }, conv)
+        }
+    }
+
     fun titleOf(messages: List<ChatMessage>): String {
         val first = messages.firstOrNull { it.role == "user" && it.text.isNotBlank() } ?: return "新对话"
         val t = first.text.replace('\n', ' ').trim()

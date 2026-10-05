@@ -181,7 +181,7 @@ object AgentChat {
                     AgentTaskStore.updateRunningTool(conversationId, label, guessHint(call.name, call.args))
 
                     val t0 = System.currentTimeMillis()
-                    val result = AgentTools.run(
+                    var result = AgentTools.run(
                         ctx, env, call.name, call.args, askUser,
                         // 逐行看输出，认出下载进度和速度就更新到界面上
                         onLine = { line ->
@@ -189,6 +189,53 @@ object AgentChat {
                             Progress.speed(line)?.let { AgentTaskStore.updateToolSpeed(conversationId, it) }
                         },
                     )
+
+                    // ---- 要 root？弹窗问 ----
+                    //
+                    // 用户的要求：**勾了 root 也默认只用普通权限和沙箱**，
+                    // 只有 Agent 说"这条必须 su"时才拦。
+                    // 弹窗中间显示具体命令、下面显示它给的理由。
+                    if (!result.ok && result.output.startsWith(NEED_ROOT_PREFIX)) {
+                        val payload = result.output.removePrefix(NEED_ROOT_PREFIX)
+                        val cmd = payload.substringBefore("|")
+                        val why = payload.substringAfter("|", "")
+
+                        val gate = kotlinx.coroutines.CompletableDeferred<Boolean>()
+                        AgentTaskStore.pendingConfirm = AgentTaskStore.ConfirmRequest(
+                            conversationId = conversationId,
+                            hit = lo.naui.agent.DangerGuard.Hit(
+                                category = lo.naui.agent.DangerGuard.Category(
+                                    id = "root",
+                                    label = "需要 root",
+                                    note = "它会拿到系统最高权限，能改任何东西",
+                                    consequence = "跑错了可能让系统出问题、或者把你的数据弄没。",
+                                    regexes = emptyList(),
+                                ),
+                                target = cmd,
+                            ),
+                            answer = gate,
+                            command = cmd,
+                            reason = why,
+                            forRoot = true,
+                        )
+                        AgentTaskStore.updateRunningTool(
+                            conversationId, "", "等你同意用 root"
+                        )
+
+                        val agreed = gate.await()
+                        result = if (agreed) {
+                            val out = runCatching {
+                                lo.naui.sys.Privilege.exec(ctx, cmd)
+                            }.getOrNull()
+                            if (out != null) {
+                                AgentTools.ToolResult(true, out)
+                            } else {
+                                AgentTools.ToolResult(false, "提权执行失败（su 没拿到？）")
+                            }
+                        } else {
+                            AgentTools.ToolResult(false, "用户不同意用 root。换个不需要 root 的办法，或者跟他解释清楚为什么非要 root。")
+                        }
+                    }
                     val cost = System.currentTimeMillis() - t0
                     // ⚠️ 这里**故意不清**。
                     // 以前每跑完一个工具就清一次、下一个再设一次，

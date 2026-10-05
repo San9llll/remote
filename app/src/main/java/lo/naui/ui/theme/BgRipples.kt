@@ -52,7 +52,6 @@ object BgRipples {
     private var pending: Pair<Float, Float>? = null
 
     fun pend(x: Float, y: Float) {
-        if (Prefs.current?.powerSave == true) return
         pending = x.coerceIn(0f, 1f) to y.coerceIn(0f, 1f)
     }
 
@@ -74,9 +73,6 @@ object BgRipples {
      * 传进来的是 px 还是 dp，也不怕窗口尺寸变。
      */
     fun add(x: Float, y: Float) {
-        // 省电模式下不播 —— 涟漪要 60fps 驱动，是这里少数的"跑满一秒钟"的东西
-        if (Prefs.current?.powerSave == true) return
-
         val now = System.currentTimeMillis()
         val alive = list.filter { now - it.at < LINGER_MS }
         list = alive + Ripple(x.coerceIn(0f, 1f), y.coerceIn(0f, 1f), now)

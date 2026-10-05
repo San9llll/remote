@@ -61,8 +61,20 @@ object AgentTools {
         AgentTool(
             name = SHELL,
             description = "在设备上执行一条 shell 命令，返回它的输出。" +
-                "可以看文件、跑命令、装东西、改配置。沙箱环境下只能在 app 的 data 目录里活动。",
-            properties = JSONObject().put("command", str("要执行的命令，比如 ls -al /sdcard 或者 pm list packages")),
+                "可以看文件、跑命令、装东西、改配置。沙箱环境下只能在 app 的 data 目录里活动。\n\n" +
+                "**注意**：默认都是普通用户权限。如果这条命令**必须**用 root（要写系统分区、" +
+                "动别的 app 的数据、改系统设置），那要先把 `reason` 填上 —— " +
+                "用户会看到你想干什么、以及你为什么要这么干，他同意了你才能拿到 su。",
+            properties = JSONObject()
+                .put("command", str("要执行的命令，比如 ls -al /sdcard 或者 pm list packages"))
+                .put("reason", str(
+                    "如果这条命令需要 root 权限，在这儿说清楚**为什么**。" +
+                        "比如「要改 /system 下的某个配置来关掉这个功能，因为设置界面里没有开关」。" +
+                        "不需要 root 的命令就不用填。"
+                ))
+                .put("need_root", JSONObject()
+                    .put("type", "boolean")
+                    .put("description", "这条命令是不是必须用 root 跑，默认 false")),
             required = listOf("command"),
         ),
         AgentTool(
@@ -195,7 +207,14 @@ object AgentTools {
         args: JSONObject,
         onLine: ((String) -> Unit)? = null,
     ): ToolResult = when (name) {
-        SHELL -> AgentRunner.shell(ctx, env, args.optString("command", "").trim(), onLine)
+        SHELL -> AgentRunner.shell(
+            ctx, env,
+            args.optString("command", "").trim(),
+            onLine,
+            // 要 root 的话把理由一起带上 —— 界面弹窗要用
+            needRoot = args.optBoolean("need_root", false),
+            reason = args.optString("reason", "").trim(),
+        )
 
         BATCH -> {
             val arr = args.optJSONArray("commands")

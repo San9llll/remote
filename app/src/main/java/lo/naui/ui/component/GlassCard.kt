@@ -118,8 +118,8 @@ fun GlassCard(
     val prefs = Prefs.current
     val radius = (prefs?.glassRadius ?: 20).dp
     val realShape: Shape = shape ?: RoundedCornerShape(radius)
-    val blurDp = prefs?.effectiveBlur ?: 0f
-    val lensDp = prefs?.effectiveLens ?: 20f
+    val blurDp = prefs?.glassBlur ?: 0f
+    val lensDp = prefs?.glassLens ?: 20f
     // 深色下玻璃要更"实"，不然字看不清
     val alpha = (prefs?.glassAlpha ?: 0.58f) + if (isDark) 0.12f else 0f
     val fill = surface.copy(alpha = alpha.coerceIn(0.08f, 0.96f))

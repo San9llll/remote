@@ -240,7 +240,6 @@ class ThemePrefs(context: Context) {
         updateDialogScrim(0.5f)
         updateGlassRadius(20)
         updateBgStyle(BgStyle.Nk)
-        updatePowerSave(false)
     }
     fun updateStyle(v: ThemePaletteStyle) { paletteStyle = v; sp.edit().putString("style", v.name).apply() }
     fun updateSpec(v: ThemeColorSpec) { colorSpec = v; sp.edit().putString("spec", v.name).apply() }
@@ -503,12 +502,6 @@ class ThemePrefs(context: Context) {
     /* ---------- 玻璃参数（液态玻璃那几个旋钮）---------- */
 
     /** 模糊半径，dp */
-    /** 实际用的模糊 —— 省电模式一律 0 */
-    val effectiveBlur: Float get() = if (powerSave) 0f else glassBlur
-
-    /** 实际用的折射深度 —— 省电模式一律 0 */
-    val effectiveLens: Float get() = if (powerSave) 0f else glassLens
-
     var glassBlur by mutableStateOf(sp.getFloat("glass_blur", 0f))
 
     fun updateGlassBlur(v: Float) {
@@ -530,23 +523,6 @@ class ThemePrefs(context: Context) {
     fun updateGlassAlpha(v: Float) {
         glassAlpha = v.coerceIn(0.10f, 0.95f)
         sp.edit().putFloat("glass_alpha", glassAlpha).apply()
-    }
-
-    /**
-     * 省电模式。
-     *
-     * 打开之后：所有模糊直接按 0 算、切背景不播涟漪、卡片不做入场动画。
-     *
-     * 为什么要有它：实机反馈"打开应用 CPU 被压到 480 / 781MHz"，
-     * 也就是系统在降频保护。模糊（`Modifier.blur`）和真折射是这里最贵的两样，
-     * 但我没法在真机上量到底哪个占大头 —— 所以给个能一键关掉的开关，
-     * 你自己试试是不是它。
-     */
-    var powerSave by mutableStateOf(sp.getBoolean("power_save", false))
-
-    fun updatePowerSave(v: Boolean) {
-        powerSave = v
-        sp.edit().putBoolean("power_save", v).apply()
     }
 
     /**

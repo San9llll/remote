@@ -76,9 +76,12 @@ object BuildDeps {
         appendLine("#!/data/data/com.termux/files/usr/bin/bash")
         appendLine("# Nakour 编译依赖安装")
         appendLine("set -o pipefail")
-        appendLine("export PATH=\\$PREFIX/bin:\\$PATH")
-        appendLine("export TMPDIR=\\$PREFIX/tmp")
-        appendLine("export HOME=\\$PREFIX/../home")
+        // ⚠️ Kotlin 普通字符串里 `$` 要写 `\$` 才是字面量。
+        // 我原来写的是 `\\$`（两个反斜杠 + $），结果 `$PREFIX` 还是被当插值，
+        // 编译期直接报 Unresolved reference 'PREFIX'。
+        appendLine("export PATH=\$PREFIX/bin:\$PATH")
+        appendLine("export TMPDIR=\$PREFIX/tmp")
+        appendLine("export HOME=\$PREFIX/../home")
         appendLine()
         appendLine("echo '[1/3] 更新包索引…'")
         appendLine("yes | pkg update -y >/dev/null 2>&1 || true")

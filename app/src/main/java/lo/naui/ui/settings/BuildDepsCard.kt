@@ -147,18 +147,24 @@ fun BuildDepsCard() {
             val p = if (total > 0) (doneCount + failCount).toFloat() / total else 0f
 
             Spacer(Modifier.height(4.dp))
+            // ⚠️ 颜色必须在 Canvas 外面取好。
+            // `DrawScope` 里读不了 `MiuixTheme` —— 它是 @Composable 的，
+            // 而 Canvas 的 lambda 不是 composable 上下文。
+            // （这条在「工作纪律」里记过，我又犯了一次）
+            val barColor = MiuixTheme.colorScheme.primary
+            val trackColor = MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.18f)
             Box(
                 Modifier
                     .fillMaxWidth()
                     .height(4.dp)
                     .clip(RoundedCornerShape(2.dp))
-                    .background(MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.18f)),
+                    .background(trackColor),
             ) {
                 androidx.compose.foundation.Canvas(Modifier.fillMaxWidth().height(4.dp)) {
                     val w = size.width * p.coerceIn(0f, 1f)
                     if (w > 0f) {
                         drawRoundRect(
-                            color = MiuixTheme.colorScheme.primary,
+                            color = barColor,
                             topLeft = androidx.compose.ui.geometry.Offset(0f, 0f),
                             size = androidx.compose.ui.geometry.Size(w, size.height),
                             cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.height / 2f),

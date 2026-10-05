@@ -38,6 +38,14 @@ data class ToolResult(
  * 权限按当前能拿到的最高来（root → Shizuku → 普通），
  * 沙箱模式再额外套一层路径围栏。
  */
+/**
+ * "这条命令要 root" 的标记。
+ *
+ * 约定的格式：`__NEED_ROOT__|<命令>|<理由>`
+ * —— 上层拆一下就拿到弹窗要显示的两样东西。
+ */
+const val NEED_ROOT_PREFIX = "__NEED_ROOT__|"
+
 object AgentRunner {
 
     /**
@@ -80,8 +88,30 @@ object AgentRunner {
         env: AgentEnv,
         command: String,
         onLine: ((String) -> Unit)? = null,
+        /** 这条命令是不是必须用 root */
+        needRoot: Boolean = false,
+        /** Agent 给的理由 —— 弹窗上要显示给用户看 */
+        reason: String = "",
     ): ToolResult = withContext(Dispatchers.IO) {
         runCatching {
+            // ---- 要 root 的先拦一道 ----
+            //
+            // 用户的要求：**勾了 root 也默认只用普通权限和沙箱**，
+            // 只有 Agent 主动说"这条必须用 su"时才弹窗问他。
+            //
+            // 弹窗里要显示：**具体命令** + **Agent 给的理由**。
+            //
+            // 这儿不直接执行，而是返回一个带特殊前缀的结果 ——
+            // 让上层（AgentChat）看见它就转去走 askUser 那套弹窗。
+            // 为什么用标记而不是在这里弹：这儿在后台线程，弹不了窗。
+            if (needRoot && env == AgentEnv.Host &&
+                Privilege.level(ctx) != PrivLevel.Normal
+            ) {
+                val payload = NEED_ROOT_PREFIX + command.replace("|", " ") +
+                    "|" + reason.replace("|", " ").replace("\n", " ")
+                return@runCatching ToolResult(false, payload)
+            }
+
             if (env == AgentEnv.Sandbox) {
                 val root = sandboxRoot(ctx)
                 val cmd = guard(command, root)

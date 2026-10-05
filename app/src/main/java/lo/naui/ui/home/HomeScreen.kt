@@ -64,7 +64,8 @@ fun HomeScreen(
     var refreshing by remember { mutableStateOf(false) }
     // 拉一次就把设备/权限信息重新问一遍，这样"下拉刷新"是真有东西刷新的
     var deviceLine by remember { mutableStateOf("") }
-    var lspLine by remember { mutableStateOf("") }
+    // LSPosed 那套删了，这栏改回显示当前的权限级别（root / Shizuku / 普通）
+    var privLine by remember { mutableStateOf("") }
     // 当前能拿到的最高权限（没有就 null，那一行整个不显示）
     var topPriv by remember { mutableStateOf<lo.naui.sys.TopPrivilege?>(null) }
 
@@ -74,7 +75,7 @@ fun HomeScreen(
         topPriv = runCatching { Privilege.topInfo(ctx) }.getOrNull()
         deviceLine = Build.MANUFACTURER + " " + Build.MODEL
         // 右边那栏：LSPosed 的框架版本 + API 版本
-        lspLine = lo.naui.sys.XposedActive.summary(ctx)
+        privLine = runCatching { Privilege.level(ctx).label }.getOrDefault("普通用户")
         delay(320)
     }
 
@@ -177,8 +178,8 @@ fun HomeScreen(
                         SceneStatusStrip(
                             leftTitle = "设备",
                             leftValue = deviceLine.ifBlank { Build.MANUFACTURER + " " + Build.MODEL },
-                            rightTitle = "LSP 权限",
-                            rightValue = lspLine.ifBlank { "—" },
+                            rightTitle = "权限",
+                            rightValue = privLine.ifBlank { "—" },
                         )
                     }
                 }

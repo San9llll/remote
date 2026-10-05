@@ -396,7 +396,7 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
             // 把 backdrop 置成 null，卡片就退化成"半透明叠色" ——
             // 它下面就是涟漪层，**自然透出来，就是实时的**。
             // 过渡一结束，backdrop 恢复，卡片又变回液态玻璃。
-            val ripplesActive = BgRipples.active().isNotEmpty()
+            val ripplesActive = lo.naui.ui.theme.BgRipples.active().isNotEmpty()
             androidx.compose.runtime.CompositionLocalProvider(
                 lo.naui.ui.component.LocalGlassBackdrop provides
                     (if (ripplesActive) null else backdrop)

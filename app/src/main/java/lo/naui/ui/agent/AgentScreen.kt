@@ -161,9 +161,12 @@ fun AgentScreen(
     LaunchedEffect(task.progress) { progress = task.progress }
     var error by remember { mutableStateOf<String?>(null) }
     var sheetOpen by remember { mutableStateOf(false) }
-    // 危险动作的确认：AI 那边挂起，等用户点
-    // 危险确认现在从 Store 上取 —— 任务在服务里跑，界面只负责弹
-    val confirmHit = lo.naui.agent.AgentTaskStore.pendingConfirm?.hit
+    // 危险动作的确认：AI 那边挂起，等用户点。
+    //
+    // 取的是**整个请求**（不只是 hit）—— 因为弹窗还要显示
+    // Agent 给的理由（req.reason）和它想跑的那条命令（req.command）。
+    val req = lo.naui.agent.AgentTaskStore.pendingConfirm
+    val confirmHit = req?.hit
     val listState = rememberLazyListState()
 
     // 一个文件按钮就够了（图片和文本都从这儿进，按类型自己分辨）
@@ -595,7 +598,13 @@ fun AgentScreen(
                         }
                     },
             ) {
-                Text("危险请求", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                // 标题：普通的危险命令是「危险请求」，
+                // 要 root 的那种单独说清楚（用户要看懂这两者不一样）
+                Text(
+                    if (req.forRoot) "它想用 root" else "危险请求",
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
 
                 Spacer(Modifier.height(10.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -620,7 +629,11 @@ fun AgentScreen(
                     )
                 }
 
-                // 中间：把具体命令摆出来
+                // ---- 中间：具体命令 ----
+                //
+                // 用户的要求："提示中间是 agent 具体需要执行的代码"。
+                // root 那种用 req.command（整条命令），
+                // 普通的还用 hit.matched（命中的那一小段，太长的命令全摆出来反而看不清重点）。
                 Spacer(Modifier.height(12.dp))
                 Box(
                     Modifier
@@ -630,11 +643,41 @@ fun AgentScreen(
                         .padding(12.dp),
                 ) {
                     Text(
-                        hit.matched,
+                        if (req.forRoot && req.command.isNotBlank()) req.command
+                        else hit.matched,
                         fontSize = 12.sp,
                         fontFamily = FontFamily.Monospace,
                         color = Color(0xFFFF8A80),
                     )
+                }
+
+                // ---- 下面：Agent 给的理由 ----
+                //
+                // 用户的要求："下面是 agent 给出的理由"。
+                // 只有它主动说"这次要 root"时才有。
+                if (req.reason.isNotBlank()) {
+                    Spacer(Modifier.height(12.dp))
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.10f))
+                            .padding(12.dp),
+                    ) {
+                        Column {
+                            Text(
+                                "它说为什么要这么做",
+                                fontSize = 10.5.sp,
+                                color = MiuixTheme.colorScheme.primary,
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                req.reason,
+                                fontSize = 12.sp,
+                                color = MiuixTheme.colorScheme.onSurface,
+                            )
+                        }
+                    }
                 }
 
                 Spacer(Modifier.height(10.dp))

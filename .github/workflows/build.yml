@@ -5,6 +5,13 @@ on:
     branches: [ main, master ]
     tags: [ 'v*' ]
   workflow_dispatch:
+    # 允许从 App 里触发构建（内置编译那个功能）。
+    # 传个 tag 名就会顺便打个包发 Release。
+    inputs:
+      tag:
+        description: '打个什么 tag（留空就只构建不出 Release）'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -126,10 +133,15 @@ jobs:
           path: out/*.apk
           if-no-files-found: error
 
+      # 出 Release 的两种情形：
+      #   ① 推了 v* 的 tag（平时手动发版）
+      #   ② 从 App 里用 workflow_dispatch 触发，并且填了 tag
+      # —— ② 就是"内置编译"那条路
       - name: Publish Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
           files: out/*.apk
-          name: Nakour ${{ github.ref_name }}  (${{ github.sha }})
+          name: Nakour ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}  (${{ github.sha }})
           generate_release_notes: true

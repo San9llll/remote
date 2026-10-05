@@ -174,6 +174,11 @@ fun SettingsScreen(
                 }
             }
 
+            item(key = "build") {
+                SectionTitle("编译")
+                BuildCard()
+            }
+
             item(key = "perf") {
                 SectionTitle("性能")
                 SettingsCard(index = 4) {

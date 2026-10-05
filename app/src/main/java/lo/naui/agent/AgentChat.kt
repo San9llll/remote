@@ -111,6 +111,18 @@ object AgentChat {
 
             val log = mutableListOf<String>()
             val steps = mutableListOf<ToolStep>()
+
+            /**
+             * 同一个工具连着失败的次数。
+             *
+             * 为什么要盯它：实机反馈过"一次回答用了 200 多次思考" ——
+             * 其中一大块是模型**卡在同一个动作上反复撞**（命令报错、它换个写法再试、还错…）。
+             * astrbot 那边也有类似的"别让它钻牛角尖"的机制。
+             *
+             * 这里定：同一个工具**连着失败 4 次**就强制收手，把情况说给用户听。
+             */
+            var lastFailedTool = ""
+            var consecutiveFail = 0
             val reasonAll = StringBuilder()
             var round = 0
             var cached = 0
@@ -178,6 +190,34 @@ object AgentChat {
                     // 以前每跑完一个工具就清一次、下一个再设一次，
                     // 界面上那条"正在下载…"就一闪一闪（用户说的"一直闪"）。
                     // 让它留着，等下一轮开始或者整轮结束时统一收。
+
+                    // ---- 连着失败就收手 ----
+                    if (result.ok) {
+                        consecutiveFail = 0
+                        lastFailedTool = ""
+                    } else {
+                        if (call.name == lastFailedTool) {
+                            consecutiveFail++
+                        } else {
+                            lastFailedTool = call.name
+                            consecutiveFail = 1
+                        }
+                        if (consecutiveFail >= 4) {
+                            // 别让它继续撞了
+                            AgentTaskStore.updateRunningTool(conversationId, "", "")
+                            return@runCatching AgentRun(
+                                reply = "「" + label + "」连着 " + consecutiveFail +
+                                    " 次都失败了，我先停下。\n\n最后一次的报错：\n" +
+                                    result.output.take(600) +
+                                    "\n\n换个思路，或者你告诉我该怎么做。",
+                                toolLog = log,
+                                steps = steps,
+                                thinkRounds = round,
+                                usage = AgentApi.Usage(cached, input, output, spent),
+                                reasoning = reasonAll.toString(),
+                            )
+                        }
+                    }
 
                     // 只记"用了什么、成没成、多大动静"，命令原文不进这条
                     val line = "▸ " + label + " · " + brief +

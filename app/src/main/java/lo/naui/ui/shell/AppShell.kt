@@ -349,6 +349,14 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
                     blurred = false,
                     darkScrim = isDarkTheme,
                 )
+
+                // 涟漪在**素材层里也画一份**。
+                //
+                // 为什么：卡片里的玻璃（drawBackdrop）采样的就是这一层 ——
+                // 涟漪要在这儿，卡片才会跟着背景一起变
+                //（用户说的"卡片和模糊没有实时渲染"）。
+                // 下面视觉层还会再画一份，那份是给眼睛看的。
+                RippleLayer()
             }
 
             // ② 视觉层：糊 + 压黑，这才是你眼睛看到的那张背景
@@ -364,144 +372,10 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
                 darkScrim = isDarkTheme,
             )
 
-            // ①.5 涟漪层（在卡片**下面**，所以不挡内容）
-            //
-            // 结构改过一次，现在是：
-            //   先铺**旧图**（铺满）      ← 过渡期间看到的一直是它
-            //   再在**圆内**画新图        ← 圆扩到哪儿，哪儿才变
-            //
-            // 之前是反的（底层新图 + 旧图裁掉圆内），实机上表现成
-            // "先拉出一整张新图占满屏幕，动画才跟上"，而且用了 Path.op（很贵，会卡）。
-            // 现在只用 clipPath，便宜得多。
-            var frameTick by remember { mutableIntStateOf(0) }
-            LaunchedEffect(Unit) {
-                while (true) {
-                    if (lo.naui.ui.theme.BgRipples.active().isNotEmpty()) {
-                        frameTick++
-                    }
-                    kotlinx.coroutines.delay(16)
-                }
-            }
-
-            val ripples = lo.naui.ui.theme.BgRipples.active()
-            @Suppress("UNUSED_EXPRESSION")
-            run { frameTick }
-
-            // 条件只看"有没有涟漪"和"两张图在不在"——
-            // 之前卡在 prevWallpaper 上，而它第一轮可能是 null，
-            // 结果整层不画，用户直接看到底层的新图（这就是"看不到动画"的原因）
-            if (ripples.isNotEmpty() && shownWallpaper != null && pendingWallpaper != null) {
-                // ⚠️ 这里**不能给 zIndex**。
-                //
-                // Compose 里 zIndex 默认是 0，而内容层我没设（也是 0）——
-                // 之前这里写了 zIndex(0.2f)，结果涟漪层**跑到内容上面去了**
-                // （用户反馈："主题切换还是有全屏图片且显示在最上层"）。
-                //
-                // 它本来就声明在内容层**前面**，按顺序画就是"背景之上、内容之下"，
-                // 不加 zIndex 才对。
-                androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
-                    val now = System.currentTimeMillis()
-                    val old = shownWallpaper ?: return@Canvas
-                    val new = pendingWallpaper ?: return@Canvas
-
-                    // ---- 第一步：旧图铺满 ----
-                    drawImage(
-                        image = old,
-                        srcOffset = androidx.compose.ui.unit.IntOffset.Zero,
-                        srcSize = androidx.compose.ui.unit.IntSize(old.width, old.height),
-                        dstOffset = androidx.compose.ui.unit.IntOffset.Zero,
-                        dstSize = androidx.compose.ui.unit.IntSize(
-                            size.width.toInt(), size.height.toInt()
-                        ),
-                    )
-
-                    // ---- 第二步：圆内画新图 ----
-                    // 每个涟漪一个圆，各自按自己的进度长大
-                    ripples.forEach { r ->
-                        val p = lo.naui.ui.theme.BgRipples.progressOf(r, now)
-                        val cx = size.width * r.cx
-                        val cy = size.height * r.cy
-                        val maxR = maxOf(
-                            kotlin.math.hypot(cx, cy),
-                            kotlin.math.hypot(size.width - cx, cy),
-                            kotlin.math.hypot(cx, size.height - cy),
-                            kotlin.math.hypot(size.width - cx, size.height - cy),
-                        )
-                        val radius = (maxR * p).coerceAtLeast(1f)
-
-                        val circle = androidx.compose.ui.graphics.Path().apply {
-                            addOval(
-                                androidx.compose.ui.geometry.Rect(
-                                    cx - radius, cy - radius, cx + radius, cy + radius
-                                )
-                            )
-                        }
-
-                        clipPath(circle) {
-                            drawImage(
-                                image = new,
-                                srcOffset = androidx.compose.ui.unit.IntOffset.Zero,
-                                srcSize = androidx.compose.ui.unit.IntSize(new.width, new.height),
-                                dstOffset = androidx.compose.ui.unit.IntOffset.Zero,
-                                dstSize = androidx.compose.ui.unit.IntSize(
-                                    size.width.toInt(), size.height.toInt()
-                                ),
-                            )
-                        }
-
-                        // ---- 切线：跟卡片同款的玻璃质感 ----
-                        // 画不出真折射（那要 drawBackdrop，Canvas 里没有），
-                        // 但可以照着卡片的观感叠：一层宽雾 + 一层亮边 + 一条高光。
-                        // 再往外扫一点渐变，看着就像"玻璃的边缘在推过去"。
-                        if (p < 1f) {
-                            val a = lo.naui.ui.theme.BgRipples.edgeAlphaOf(r, now)
-                            if (a > 0.01f) {
-                                val center = androidx.compose.ui.geometry.Offset(cx, cy)
-
-                                // 外圈雾（玻璃的厚度）
-                                drawCircle(
-                                    brush = androidx.compose.ui.graphics.Brush.radialGradient(
-                                        colors = listOf(
-                                            androidx.compose.ui.graphics.Color.Transparent,
-                                            androidx.compose.ui.graphics.Color.White.copy(alpha = 0.12f * a),
-                                            androidx.compose.ui.graphics.Color.Transparent,
-                                        ),
-                                        center = center,
-                                        radius = radius,
-                                    ),
-                                    radius = radius,
-                                    center = center,
-                                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = 56.dp.toPx()),
-                                )
-
-                                // 玻璃边
-                                drawCircle(
-                                    brush = androidx.compose.ui.graphics.Brush.radialGradient(
-                                        colors = listOf(
-                                            androidx.compose.ui.graphics.Color.Transparent,
-                                            androidx.compose.ui.graphics.Color.White.copy(alpha = 0.34f * a),
-                                            androidx.compose.ui.graphics.Color.Transparent,
-                                        ),
-                                        center = center,
-                                        radius = radius,
-                                    ),
-                                    radius = radius,
-                                    center = center,
-                                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = 24.dp.toPx()),
-                                )
-
-                                // 高光细线
-                                drawCircle(
-                                    color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.5f * a),
-                                    radius = radius,
-                                    center = center,
-                                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.5.dp.toPx()),
-                                )
-                            }
-                        }
-                    }
-                }
-            }
+            // 涟漪也画在视觉层上 ——
+            // 不然被上面那层的模糊+压黑盖住，眼睛看不到。
+            // 跟素材层那份是**同一份数据**（BgRipples），所以两边是同步的。
+            RippleLayer()
 
             // ② 内容层：卡片在这里面，用 drawBackdrop 去采样上面那层
             Column(Modifier.fillMaxSize()) {
@@ -743,4 +617,160 @@ private fun AppBackdropLayer(
             }
         }
     }
+}
+
+
+/**
+ * 切背景的那层涟漪。
+ *
+ * ## 为什么要被调用两次
+ *
+ * 它得**同时**出现在两个地方：
+ *   ① `layerBackdrop` 那层（素材层）—— 卡片里的玻璃要采样到它，
+ *      这样卡片才会跟着背景一起变（用户说的"卡片要实时渲染"）
+ *   ② 视觉层 —— 不然用户眼睛看不到它（被模糊+压黑盖住了）
+ *
+ * 两次画的是同一份数据（BgRipples），所以看起来是同步的。
+ */
+@Composable
+private fun RippleLayer() {
+    // ①.5 涟漪层（在卡片**下面**，所以不挡内容）
+    //
+    // 结构改过一次，现在是：
+    //   先铺**旧图**（铺满）      ← 过渡期间看到的一直是它
+    //   再在**圆内**画新图        ← 圆扩到哪儿，哪儿才变
+    //
+    // 之前是反的（底层新图 + 旧图裁掉圆内），实机上表现成
+    // "先拉出一整张新图占满屏幕，动画才跟上"，而且用了 Path.op（很贵，会卡）。
+    // 现在只用 clipPath，便宜得多。
+    var frameTick by remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            if (lo.naui.ui.theme.BgRipples.active().isNotEmpty()) {
+                frameTick++
+            }
+            kotlinx.coroutines.delay(16)
+        }
+    }
+
+    val ripples = lo.naui.ui.theme.BgRipples.active()
+    @Suppress("UNUSED_EXPRESSION")
+    run { frameTick }
+
+    // 条件只看"有没有涟漪"和"两张图在不在"——
+    // 之前卡在 prevWallpaper 上，而它第一轮可能是 null，
+    // 结果整层不画，用户直接看到底层的新图（这就是"看不到动画"的原因）
+    if (ripples.isNotEmpty() && shownWallpaper != null && pendingWallpaper != null) {
+        // ⚠️ 这里**不能给 zIndex**。
+        //
+        // Compose 里 zIndex 默认是 0，而内容层我没设（也是 0）——
+        // 之前这里写了 zIndex(0.2f)，结果涟漪层**跑到内容上面去了**
+        // （用户反馈："主题切换还是有全屏图片且显示在最上层"）。
+        //
+        // 它本来就声明在内容层**前面**，按顺序画就是"背景之上、内容之下"，
+        // 不加 zIndex 才对。
+        androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
+            val now = System.currentTimeMillis()
+            val old = shownWallpaper ?: return@Canvas
+            val new = pendingWallpaper ?: return@Canvas
+
+            // ---- 第一步：旧图铺满 ----
+            drawImage(
+                image = old,
+                srcOffset = androidx.compose.ui.unit.IntOffset.Zero,
+                srcSize = androidx.compose.ui.unit.IntSize(old.width, old.height),
+                dstOffset = androidx.compose.ui.unit.IntOffset.Zero,
+                dstSize = androidx.compose.ui.unit.IntSize(
+                    size.width.toInt(), size.height.toInt()
+                ),
+            )
+
+            // ---- 第二步：圆内画新图 ----
+            // 每个涟漪一个圆，各自按自己的进度长大
+            ripples.forEach { r ->
+                val p = lo.naui.ui.theme.BgRipples.progressOf(r, now)
+                val cx = size.width * r.cx
+                val cy = size.height * r.cy
+                val maxR = maxOf(
+                    kotlin.math.hypot(cx, cy),
+                    kotlin.math.hypot(size.width - cx, cy),
+                    kotlin.math.hypot(cx, size.height - cy),
+                    kotlin.math.hypot(size.width - cx, size.height - cy),
+                )
+                val radius = (maxR * p).coerceAtLeast(1f)
+
+                val circle = androidx.compose.ui.graphics.Path().apply {
+                    addOval(
+                        androidx.compose.ui.geometry.Rect(
+                            cx - radius, cy - radius, cx + radius, cy + radius
+                        )
+                    )
+                }
+
+                clipPath(circle) {
+                    drawImage(
+                        image = new,
+                        srcOffset = androidx.compose.ui.unit.IntOffset.Zero,
+                        srcSize = androidx.compose.ui.unit.IntSize(new.width, new.height),
+                        dstOffset = androidx.compose.ui.unit.IntOffset.Zero,
+                        dstSize = androidx.compose.ui.unit.IntSize(
+                            size.width.toInt(), size.height.toInt()
+                        ),
+                    )
+                }
+
+                // ---- 切线：跟卡片同款的玻璃质感 ----
+                // 画不出真折射（那要 drawBackdrop，Canvas 里没有），
+                // 但可以照着卡片的观感叠：一层宽雾 + 一层亮边 + 一条高光。
+                // 再往外扫一点渐变，看着就像"玻璃的边缘在推过去"。
+                if (p < 1f) {
+                    val a = lo.naui.ui.theme.BgRipples.edgeAlphaOf(r, now)
+                    if (a > 0.01f) {
+                        val center = androidx.compose.ui.geometry.Offset(cx, cy)
+
+                        // 外圈雾（玻璃的厚度）
+                        drawCircle(
+                            brush = androidx.compose.ui.graphics.Brush.radialGradient(
+                                colors = listOf(
+                                    androidx.compose.ui.graphics.Color.Transparent,
+                                    androidx.compose.ui.graphics.Color.White.copy(alpha = 0.12f * a),
+                                    androidx.compose.ui.graphics.Color.Transparent,
+                                ),
+                                center = center,
+                                radius = radius,
+                            ),
+                            radius = radius,
+                            center = center,
+                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 56.dp.toPx()),
+                        )
+
+                        // 玻璃边
+                        drawCircle(
+                            brush = androidx.compose.ui.graphics.Brush.radialGradient(
+                                colors = listOf(
+                                    androidx.compose.ui.graphics.Color.Transparent,
+                                    androidx.compose.ui.graphics.Color.White.copy(alpha = 0.34f * a),
+                                    androidx.compose.ui.graphics.Color.Transparent,
+                                ),
+                                center = center,
+                                radius = radius,
+                            ),
+                            radius = radius,
+                            center = center,
+                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 24.dp.toPx()),
+                        )
+
+                        // 高光细线
+                        drawCircle(
+                            color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.5f * a),
+                            radius = radius,
+                            center = center,
+                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.5.dp.toPx()),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
 }

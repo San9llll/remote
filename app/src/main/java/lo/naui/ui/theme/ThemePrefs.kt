@@ -220,6 +220,26 @@ class ThemePrefs(context: Context) {
         )
 
     fun updateDarkMode(v: DarkMode) { darkMode = v; sp.edit().putString("dark", v.id).apply() }
+
+    /**
+     * 恢复出厂的玻璃 / 背景 / 配色参数。
+     *
+     * 开发者工具里那个「主题恢复默认」调的就是它。
+     * 注意**只动主题**，不动会话、书那些用户数据。
+     */
+    fun resetToDefaults() {
+        updateDarkMode(DarkMode.System)
+        updatePaletteStyle(ThemePaletteStyle.TonalSpot)
+        updateColorSpec(ThemeColorSpec.Spec2021)
+        updatePreset("blue")
+        updateGlassBlur(0f)
+        updateGlassLens(20f)
+        updateGlassAlpha(0.2f)
+        updateDialogScrim(0.5f)
+        updateGlassRadius(20)
+        updateBgStyle(BgStyle.Nk)
+        updatePowerSave(false)
+    }
     fun updateStyle(v: ThemePaletteStyle) { paletteStyle = v; sp.edit().putString("style", v.name).apply() }
     fun updateSpec(v: ThemeColorSpec) { colorSpec = v; sp.edit().putString("spec", v.name).apply() }
     fun updatePreset(name: String) {

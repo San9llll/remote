@@ -357,7 +357,7 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
                 // 涟漪要在这儿，卡片才会跟着背景一起变
                 //（用户说的"卡片和模糊没有实时渲染"）。
                 // 下面视觉层还会再画一份，那份是给眼睛看的。
-                RippleLayer(shownWallpaper, pendingWallpaper)
+                RippleLayer(shownWallpaper, pendingWallpaper, backdrop)
             }
 
             // ② 视觉层：糊 + 压黑，这才是你眼睛看到的那张背景
@@ -376,7 +376,7 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
             // 涟漪也画在视觉层上 ——
             // 不然被上面那层的模糊+压黑盖住，眼睛看不到。
             // 跟素材层那份是**同一份数据**（BgRipples），所以两边是同步的。
-            RippleLayer(shownWallpaper, pendingWallpaper)
+            RippleLayer(shownWallpaper, pendingWallpaper, backdrop)
 
             // ② 内容层：卡片在这里面，用 drawBackdrop 去采样上面那层
             Column(Modifier.fillMaxSize()) {
@@ -639,6 +639,21 @@ private fun RippleLayer(
     shown: ImageBitmap?,
     /** 等着被推出来的新图 */
     pending: ImageBitmap?,
+    /**
+     * 卡片采样用的那个 backdrop。
+     *
+     * ## 为什么必须传进来
+     *
+     * `com.kyant.backdrop` 的 `layerBackdrop` 里写着
+     * `shouldAutoInvalidate = false` —— 意思是它**不会每帧重录**，
+     * 只有被显式 `invalidate()` 才会。
+     *
+     * 而涟漪是逐帧在动的：不主动让它失效的话，卡片采到的永远是
+     * "涟漪刚开始那一帧"，看着就是**卡片不跟着背景变**。
+     *
+     * 所以这里每帧调一次 `graphicsLayer.invalidate()`，逼它重录。
+     */
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop?,
 ) {
     // ============================================================
     //  切背景的那层涟漪
@@ -666,6 +681,12 @@ private fun RippleLayer(
         while (true) {
             if (lo.naui.ui.theme.BgRipples.active().isNotEmpty()) {
                 frameTick++
+                // ⚠️ 关键的一步：逼 layerBackdrop 重录。
+                //
+                // 它内部是 `shouldAutoInvalidate = false`，
+                // 不主动喊它就不会重新录制 —— 那卡片里的玻璃
+                // 永远看到的是"涟漪刚开始那一帧"。
+                runCatching { backdrop?.graphicsLayer?.invalidate() }
             }
             // ⚠️ 30fps（原来是 16ms = 60fps）。
             // 涟漪本来就是慢慢扩的，30fps 肉眼看不出区别，

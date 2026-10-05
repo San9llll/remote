@@ -379,6 +379,28 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
             RippleLayer(shownWallpaper, pendingWallpaper, backdrop)
 
             // ② 内容层：卡片在这里面，用 drawBackdrop 去采样上面那层
+            //
+            // ---- 涟漪期间把 backdrop 掐掉 ----
+            //
+            // 为什么要这么干：
+            //
+            // `layerBackdrop` 那个 modifier 里写着 `shouldAutoInvalidate = false`
+            // —— 它**不会每帧重录**，只有内容变化时才录。
+            // 而涟漪是逐帧在动的，所以卡片采到的永远是"涟漪刚开始那一帧"，
+            // 看着就是**卡片不跟着背景变**。
+            //
+            // 我本来想直接调 `graphicsLayer.invalidate()` 逼它重录，
+            // 但 **Compose 的 GraphicsLayer 根本没这个方法**（编译期报 Unresolved）。
+            //
+            // 所以反过来：**过渡期间干脆别采样**。
+            // 把 backdrop 置成 null，卡片就退化成"半透明叠色" ——
+            // 它下面就是涟漪层，**自然透出来，就是实时的**。
+            // 过渡一结束，backdrop 恢复，卡片又变回液态玻璃。
+            val ripplesActive = BgRipples.active().isNotEmpty()
+            androidx.compose.runtime.CompositionLocalProvider(
+                lo.naui.ui.component.LocalGlassBackdrop provides
+                    (if (ripplesActive) null else backdrop)
+            ) {
             Column(Modifier.fillMaxSize()) {
                 Row(Modifier.weight(1f).fillMaxWidth()) {
                     if (standardRail) {
@@ -544,6 +566,7 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
                         .zIndex(1f),
                 )
             }
+            }   // ← CompositionLocalProvider
         }
     }
 }
@@ -681,12 +704,6 @@ private fun RippleLayer(
         while (true) {
             if (lo.naui.ui.theme.BgRipples.active().isNotEmpty()) {
                 frameTick++
-                // ⚠️ 关键的一步：逼 layerBackdrop 重录。
-                //
-                // 它内部是 `shouldAutoInvalidate = false`，
-                // 不主动喊它就不会重新录制 —— 那卡片里的玻璃
-                // 永远看到的是"涟漪刚开始那一帧"。
-                runCatching { backdrop?.graphicsLayer?.invalidate() }
             }
             // ⚠️ 30fps（原来是 16ms = 60fps）。
             // 涟漪本来就是慢慢扩的，30fps 肉眼看不出区别，

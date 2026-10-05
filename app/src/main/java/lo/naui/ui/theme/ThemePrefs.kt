@@ -229,8 +229,10 @@ class ThemePrefs(context: Context) {
      */
     fun resetToDefaults() {
         updateDarkMode(DarkMode.System)
-        updatePaletteStyle(ThemePaletteStyle.TonalSpot)
-        updateColorSpec(ThemeColorSpec.Spec2021)
+        // ⚠️ 真实函数名是 updateStyle / updateSpec，
+        // 我上一版凭印象写成 updatePaletteStyle / updateColorSpec 了
+        updateStyle(ThemePaletteStyle.TonalSpot)
+        updateSpec(ThemeColorSpec.Spec2021)
         updatePreset("blue")
         updateGlassBlur(0f)
         updateGlassLens(20f)

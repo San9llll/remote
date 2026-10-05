@@ -1,5 +1,6 @@
 package lo.naui.ui.agent
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.height
@@ -53,11 +54,8 @@ private val stamp = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
  */
 @Composable
 fun AgentSessionsScreen(onBack: () -> Unit = {}) {
-    val rctx = androidx.compose.ui.platform.LocalContext.current
-    // 正在改名的那个会话
+    // 正在改名的那个会话（下面那个 tick 原来就有，别重复声明）
     var renaming by remember { mutableStateOf<lo.naui.agent.Conversation?>(null) }
-    // 改完让它重画
-    var tick by remember { mutableStateOf(0) }
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     ChatDb.init(ctx)

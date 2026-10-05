@@ -126,7 +126,7 @@ object AgentTools {
         AgentTool(
             name = GREP,
             description = "在**文件内容**里搜关键词，返回匹配的行和行号。" +
-                "找"这东西在哪定义/在哪用到"就靠它，比读一堆文件快。",
+                "找「这东西在哪定义、在哪用到」就靠它，比读一堆文件快。",
             properties = JSONObject()
                 .put("root", str("从哪个目录找，默认当前目录"))
                 .put("pattern", str("要找的内容（普通字符串，不是正则）"))

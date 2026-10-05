@@ -157,10 +157,13 @@ object AgentStore {
     /**
      * 当前生效的系统提示词 = 人格 + 工具说明（+ 工作区路径）。
      */
-    val systemPromptNow: String get() = {
-        val ws = workspace
-        persona.prompt + TOOL_NOTE + (if (ws.isBlank()) "（没设）" else ws)
-    }
+    val systemPromptNow: String
+        // ⚠️ 是 `get() {` 不是 `get() = {`
+        // —— 后者返回的是个 lambda，类型对不上（报 "expected String, actual () -> String"）
+        get() {
+            val ws = workspace
+            return persona.prompt + TOOL_NOTE + (if (ws.isBlank()) "（没设）" else ws)
+        }
 
     /**
      * 不管人格写成什么样，末尾都接上这段。

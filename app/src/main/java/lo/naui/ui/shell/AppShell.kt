@@ -1,5 +1,6 @@
 package lo.naui.ui.shell
 
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.graphics.PathOperation
 import androidx.activity.compose.BackHandler

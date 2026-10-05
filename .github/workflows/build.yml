@@ -45,23 +45,35 @@ jobs:
         run: |
           SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
           echo "SDK=$SDK"
-          NDK_DIR="$SDK/ndk/27.0.12077973"
-
-          # ⚠️ GitHub 镜像（20260927 那版）里预装了一个**残废的 NDK**：
-          # 目录在、但少了 source.properties。而 sdkmanager 看到目录已存在就
-          # 直接跳过不修 —— 于是 Gradle 配置阶段就报
+          # ---- 挑一个能用的 NDK ----
+          #
+          # ⚠️ 这门有个坑：GitHub 镜像里预装的某些 NDK **目录在、但缺
+          # source.properties**（是个空壳）。而 sdkmanager 看到目录已存在就
+          # 跳过不修，于是 Gradle 配置阶段报
           #   [CXX1101] NDK at ... did not have a source.properties file
-          # 所以先手动把这个坏目录清掉，再装一次。
-          if [ -d "$NDK_DIR" ] && [ ! -f "$NDK_DIR/source.properties" ]; then
-            echo "发现残废的 NDK 目录，删掉重装"
-            rm -rf "$NDK_DIR"
-          fi
-
+          #
+          # 而且镜像里的版本号会变 —— 写死某一个迟早失效（就发生过：
+          # 27.0.12077973 是坏的，旁边 27.3.13750724 却是好的）。
+          #
+          # 所以不写死：**扫一遍 $SDK/ndk，挑第一个真的有 source.properties 的**。
           SM=$(ls "$SDK"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1)
           echo "sdkmanager=$SM"
-          if [ -n "$SM" ]; then
-            yes | "$SM" --licenses > /dev/null 2>&1 || true
-            "$SM" --install "ndk;27.0.12077973" > /dev/null 2>&1 || echo "sdkmanager 装 NDK 没成功"
+
+          NDK_DIR=""
+          for d in "$SDK"/ndk/*/; do
+            if [ -f "$d/source.properties" ]; then
+              NDK_DIR="${d%/}"
+              break
+            fi
+          done
+
+          if [ -z "$NDK_DIR" ]; then
+            echo "镜像里没一个能用的，自己装一个"
+            if [ -n "$SM" ]; then
+              yes | "$SM" --licenses > /dev/null 2>&1 || true
+              "$SM" --install "ndk;27.3.13750724" > /dev/null 2>&1 || echo "sdkmanager 装 NDK 没成功"
+            fi
+            NDK_DIR="$SDK/ndk/27.3.13750724"
           fi
 
           if [ -f "$NDK_DIR/source.properties" ]; then
@@ -97,22 +109,45 @@ jobs:
         run: |
           SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
           echo "SDK=$SDK"
-          NDK_DIR="$SDK/ndk/27.0.12077973"
-          if [ -d "$NDK_DIR" ] && [ ! -f "$NDK_DIR/source.properties" ]; then
-            echo "发现残废的 NDK 目录，删掉重装"
-            rm -rf "$NDK_DIR"
-          fi
+          # ---- 挑一个能用的 NDK ----
+          #
+          # ⚠️ 这门有个坑：GitHub 镜像里预装的某些 NDK **目录在、但缺
+          # source.properties**（是个残废的空壳）。而 sdkmanager 看到目录已存在
+          # 就跳过不修，于是 Gradle 配置阶段直接炸。
+          #
+          # 而且镜像里的版本号会变（写死某一个迟早失效 —— 就发生过：
+          # 27.0.12077973 是坏的，旁边 27.3.13750724 却是好的）。
+          #
+          # 所以不写死了：**扫一遍 $SDK/ndk，挑第一个真的有 source.properties 的**。
+          # 都没有才去装。
           SM=$(ls "$SDK"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1)
           echo "sdkmanager=$SM"
-          if [ -n "$SM" ]; then
-            yes | "$SM" --licenses > /dev/null 2>&1 || true
-            "$SM" --install "ndk;27.0.12077973" > /dev/null 2>&1 || echo "sdkmanager 装 NDK 没成功"
+
+          NDK_DIR=""
+          for d in "$SDK"/ndk/*/; do
+            if [ -f "$d/source.properties" ]; then
+              NDK_DIR="${d%/}"
+              break
+            fi
+          done
+
+          if [ -z "$NDK_DIR" ]; then
+            echo "没找到一个可用的 NDK，装一个"
+            if [ -n "$SM" ]; then
+              yes | "$SM" --licenses > /dev/null 2>&1 || true
+              "$SM" --install "ndk;27.3.13750724" > /dev/null 2>&1 || echo "sdkmanager 装 NDK 没成功"
+            fi
+            NDK_DIR="$SDK/ndk/27.3.13750724"
           fi
+
+          echo "用的 NDK：$NDK_DIR"
           if [ ! -f "$NDK_DIR/source.properties" ]; then
             echo "::error::NDK 还是不可用"
             ls "$SDK/ndk" 2>/dev/null || true
             exit 1
           fi
+          # 把挑中的版本号写到 gradle 能读到的地方
+          echo "ndk.dir=$NDK_DIR" >> local.properties
 
       # 只出 release 版（带日志的 debug 版不再推送）
       - name: Build release APK

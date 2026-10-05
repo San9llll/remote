@@ -8,7 +8,7 @@ android {
     compileSdk = 37
 
     // 终端要真 PTY，只能靠 native 里的 forkpty
-    ndkVersion = "27.0.12077973"
+    ndkVersion = "27.3.13750724"
 
     externalNativeBuild {
         cmake {
@@ -24,8 +24,8 @@ android {
         // 那 termux 的二进制（全在 $PREFIX/bin 下）就一个都跑不起来。
         // termux 官方也是这么绕的，代价是上不了 Play。
         targetSdk = 28
-        versionCode = 85
-        versionName = "0.85.0"
+        versionCode = 86
+        versionName = "0.86.0"
 
         // 只打 arm64-v8a。
         // 一来机器就是 arm64，多带别的 ABI 纯属白占体积；

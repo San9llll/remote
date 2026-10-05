@@ -356,7 +356,7 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
                 // 涟漪要在这儿，卡片才会跟着背景一起变
                 //（用户说的"卡片和模糊没有实时渲染"）。
                 // 下面视觉层还会再画一份，那份是给眼睛看的。
-                RippleLayer()
+                RippleLayer(shownWallpaper, pendingWallpaper)
             }
 
             // ② 视觉层：糊 + 压黑，这才是你眼睛看到的那张背景
@@ -375,7 +375,7 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
             // 涟漪也画在视觉层上 ——
             // 不然被上面那层的模糊+压黑盖住，眼睛看不到。
             // 跟素材层那份是**同一份数据**（BgRipples），所以两边是同步的。
-            RippleLayer()
+            RippleLayer(shownWallpaper, pendingWallpaper)
 
             // ② 内容层：卡片在这里面，用 drawBackdrop 去采样上面那层
             Column(Modifier.fillMaxSize()) {
@@ -633,7 +633,12 @@ private fun AppBackdropLayer(
  * 两次画的是同一份数据（BgRipples），所以看起来是同步的。
  */
 @Composable
-private fun RippleLayer() {
+private fun RippleLayer(
+    /** 底层现在显示的那张 */
+    shown: ImageBitmap?,
+    /** 等着被推出来的新图 */
+    pending: ImageBitmap?,
+) {
     // ①.5 涟漪层（在卡片**下面**，所以不挡内容）
     //
     // 结构改过一次，现在是：
@@ -660,7 +665,7 @@ private fun RippleLayer() {
     // 条件只看"有没有涟漪"和"两张图在不在"——
     // 之前卡在 prevWallpaper 上，而它第一轮可能是 null，
     // 结果整层不画，用户直接看到底层的新图（这就是"看不到动画"的原因）
-    if (ripples.isNotEmpty() && shownWallpaper != null && pendingWallpaper != null) {
+    if (ripples.isNotEmpty() && shown != null && pending != null) {
         // ⚠️ 这里**不能给 zIndex**。
         //
         // Compose 里 zIndex 默认是 0，而内容层我没设（也是 0）——
@@ -671,8 +676,8 @@ private fun RippleLayer() {
         // 不加 zIndex 才对。
         androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
             val now = System.currentTimeMillis()
-            val old = shownWallpaper ?: return@Canvas
-            val new = pendingWallpaper ?: return@Canvas
+            val old = shown ?: return@Canvas
+            val new = pending ?: return@Canvas
 
             // ---- 第一步：旧图铺满 ----
             drawImage(

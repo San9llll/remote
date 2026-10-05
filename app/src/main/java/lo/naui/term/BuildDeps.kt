@@ -289,13 +289,19 @@ object BuildDeps {
             // 不能照抄 Termux 官方的 `/data/data/com.termux/...` ——
             // 那是它自己的包名，我们的环境在 `lo.naui` 的 filesDir 底下。
             java.io.File(dir, "env.sh").writeText(
+                // ⚠️ 这是 Kotlin 的**原始字符串**（三引号）。
+                // 原始字符串里 `\$` **不是转义** —— `$` 照样会触发插值，
+                // 所以 `\$PATH` 会被当成"变量 PATH"，编译期报 Unresolved reference 'PATH'。
+                // 要输出一个字面量 `$` 得写 `${'$'}`。
+                //
+                // （普通字符串里 `\$` 是合法转义，那边没问题 —— 两种规则不一样，容易搞混）
                 """#!$prefix/bin/bash
 # Nakour 编译环境 —— 在终端里 `source env.sh` 之后就能直接用 javac / aapt2 了
 export PREFIX="$prefix"
-export PATH="$prefix/bin:$prefix/bin/applets:\$PATH"
+export PATH="$prefix/bin:$prefix/bin/applets:${'$'}PATH"
 export LD_LIBRARY_PATH="$prefix/lib"
-export HOME="\$(dirname "$prefix")/home"
-export TMPDIR="\$(dirname "$prefix")/tmp"
+export HOME="$(dirname "$prefix")/home"
+export TMPDIR="$(dirname "$prefix")/tmp"
 """.trimIndent() + "\n"
             )
 

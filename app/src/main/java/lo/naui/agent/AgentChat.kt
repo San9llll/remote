@@ -211,7 +211,8 @@ object AgentChat {
                                     consequence = "跑错了可能让系统出问题、或者把你的数据弄没。",
                                     regexes = emptyList(),
                                 ),
-                                target = cmd,
+                                // ⚠️ Hit 的字段叫 matched，不是 target
+                                matched = cmd,
                             ),
                             answer = gate,
                             command = cmd,
@@ -228,12 +229,12 @@ object AgentChat {
                                 lo.naui.sys.Privilege.exec(ctx, cmd)
                             }.getOrNull()
                             if (out != null) {
-                                AgentTools.ToolResult(true, out)
+                                ToolResult(true, out)
                             } else {
-                                AgentTools.ToolResult(false, "提权执行失败（su 没拿到？）")
+                                ToolResult(false, "提权执行失败（su 没拿到？）")
                             }
                         } else {
-                            AgentTools.ToolResult(false, "用户不同意用 root。换个不需要 root 的办法，或者跟他解释清楚为什么非要 root。")
+                            ToolResult(false, "用户不同意用 root。换个不需要 root 的办法，或者跟他解释清楚为什么非要 root。")
                         }
                     }
                     val cost = System.currentTimeMillis() - t0

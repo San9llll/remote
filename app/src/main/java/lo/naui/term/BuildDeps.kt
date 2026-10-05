@@ -231,7 +231,22 @@ object BuildDeps {
     }
 
     /**
-     * 跑安装脚本。
+     * 跑安装脚本，装完顺手**铺到 Agent 工作区**。
+     *
+     * ## "铺到工作区"是啥意思
+     *
+     * 装好的工具（javac / aapt2 / d8…）在 Termux 的 `$PREFIX/bin` 底下。
+     * Agent 在工作区里干活的时候，默认的 `PATH` 里可能没有它们 ——
+     * 那就得每次手写全路径，很烦。
+     *
+     * 所以在工作区里放一个 **`env.sh`**：
+     *
+     * ```bash
+     * source ./env.sh          # 之后就能直接敲 javac / aapt2 了
+     * ```
+     *
+     * 里面把 `PATH` / `LD_LIBRARY_PATH` / `PREFIX` 都设好。
+     * 同时往 `README.txt` 里写一句，Agent 读一下就知道怎么用。
      */
     suspend fun install(
         ctx: Context,
@@ -242,10 +257,65 @@ object BuildDeps {
                 throw IllegalStateException("Termux 环境还没装 —— 先去终端页装它")
             }
             val out = runInTermux(ctx, installScript(), onLine)
-            // 只要有任何一个 CHECK-OK 就算部分成功，全部失败才报错
             if (out.contains("[CHECK-OK]")) markInstalled(ctx)
+
+            // 铺到工作区
+            deployToWorkspace(ctx)?.let { ws ->
+                onLine("[DEPLOY] 已经铺到工作区：" + ws.absolutePath)
+            } ?: onLine("[DEPLOY] 没设工作区，跳过（到 Agent 设置里选一个文件夹）")
             Unit
         }
+    }
+
+    /**
+     * 往工作区里放 `env.sh` 和一句说明。
+     *
+     * 工作区是 SAF 选的（`content://`）还是普通路径都能应付：
+     * SAF 那种写不了文件，就跳过（那种情况 Agent 也没法当普通目录用）。
+     */
+    private fun deployToWorkspace(ctx: Context): java.io.File? {
+        val ws = lo.naui.agent.AgentStore.workspace
+        if (ws.isBlank()) return null
+        // 只支持真实路径（SAF 的 content:// 没法直接当 shell 的工作目录）
+        if (ws.startsWith("content://")) return null
+
+        val dir = java.io.File(ws)
+        if (!dir.exists() || !dir.isDirectory) return null
+
+        runCatching {
+            val prefix = prefixOf(ctx).absolutePath
+
+            // ⚠️ shebang 要用**实际的** bash 路径。
+            // 不能照抄 Termux 官方的 `/data/data/com.termux/...` ——
+            // 那是它自己的包名，我们的环境在 `lo.naui` 的 filesDir 底下。
+            java.io.File(dir, "env.sh").writeText(
+                """#!$prefix/bin/bash
+# Nakour 编译环境 —— 在终端里 `source env.sh` 之后就能直接用 javac / aapt2 了
+export PREFIX="$prefix"
+export PATH="$prefix/bin:$prefix/bin/applets:\$PATH"
+export LD_LIBRARY_PATH="$prefix/lib"
+export HOME="\$(dirname "$prefix")/home"
+export TMPDIR="\$(dirname "$prefix")/tmp"
+""".trimIndent() + "\n"
+            )
+
+            java.io.File(dir, "README.txt").writeText(
+                """这个目录是 Nakour 的 Agent 工作区。
+
+env.sh          编译环境（source 它之后就能用 javac / aapt2 / d8 / apksigner）
+build.sh        手工打包一个 APK 的脚本骨架（要自己改路径）
+
+用法（在终端里）：
+    cd 到这个目录
+    source ./env.sh
+    javac -version      # 能看到版本就说明好了
+
+注意：这些工具是从 Termux 环境里调过来的，
+      所以你得先在「终端」页把 Termux 环境装上。
+"""
+            )
+        }
+        return dir
     }
 
     /**

@@ -1,5 +1,7 @@
 package lo.naui.ui.pages
 
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -30,9 +32,19 @@ fun ToolsScreen(
     onOpenShelf: () -> Unit,
     backdrop: com.kyant.backdrop.Backdrop? = null,
 ) {
+    // 左边一条侧边栏（工具入口 + 实时状态），右边是原来的卡片列表
+    Row(Modifier.fillMaxSize()) {
+
+        ToolsRail(
+            onOpenFiles = onOpenFiles,
+            onOpenTerminal = onOpenTerminal,
+            onOpenShelf = onOpenShelf,
+        )
+
     Column(
         Modifier
-            .fillMaxSize()
+            .weight(1f)
+            .fillMaxHeight()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 14.dp),
     ) {
@@ -72,5 +84,6 @@ fun ToolsScreen(
         }
 
         Spacer(Modifier.height(24.dp))
+    }
     }
 }

@@ -475,7 +475,11 @@ object AgentApi {
             .put("role", "tool")
             .put("tool_call_id", id)
             .put("name", name)
-            .put("content", content.take(20_000))
+            // 用 AgentContext.clampToolResult 而不是简单 take ——
+            // 它是照 astrbot 那套做的：**留头留尾**。
+            // 头是命令、尾是报错，中间一大坨通常没用；
+            // 直接截掉尾巴会把最关键的报错信息切没。
+            .put("content", AgentContext.clampToolResult(content))
 
     /** 模型的"我要调工具"那条，得原样塞回对话里 */
     fun assistantToolMessage(calls: List<Call>): JSONObject = JSONObject()

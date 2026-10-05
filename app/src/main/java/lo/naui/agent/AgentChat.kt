@@ -139,29 +139,63 @@ object AgentChat {
                 AgentTaskStore.updateRunningTool(conversationId, "", "")
                 onProgress(if (round == 1) "在想…" else "第 " + round + " 轮…")
 
-                val reply = AgentApi.stream(
-                    system = system,
-                    messages = messages,
-                    tools = tools,
-                    temperature = temperature,
-                    maxTokens = maxTokens,
-                    onReasoning = { r ->
-                        reasonAll.append(r)
-                        onReasoning(r)
-                    },
-                    onDelta = { onDelta(it) },
+                // ---- 空输出重试 ----
+                //
+                // 照 astrbot 那套：`EMPTY_OUTPUT_RETRY_ATTEMPTS = 3`，
+                // 退避 1~4 秒。
+                //
+                // 为什么要它：模型偶尔会返回一个**完全空**的响应
+                //（既没有正文、也没有工具调用）。这多半是服务端抽了一下，
+                // 重试一次通常就有了。不重试的话，用户会直接看到
+                // "（模型没说话）" —— 以为是坏了。
+                var reply: AgentApi.Reply? = null
+                var attempt = 0
+                while (attempt < 3) {
+                    val r = AgentApi.stream(
+                        system = system,
+                        messages = messages,
+                        tools = tools,
+                        temperature = temperature,
+                        maxTokens = maxTokens,
+                        onReasoning = { t ->
+                            reasonAll.append(t)
+                            onReasoning(t)
+                        },
+                        onDelta = { onDelta(it) },
+                    )
+                    // "空"的定义：没正文 **且** 没工具调用
+                    if (r.text.isNotBlank() || r.toolCalls.isNotEmpty()) {
+                        reply = r
+                        break
+                    }
+                    attempt++
+                    if (attempt < 3) {
+                        onProgress("没收到内容，重试第 " + attempt + " 次…")
+                        kotlinx.coroutines.delay(1000L * attempt)
+                    } else {
+                        // 三次都是空的 —— 那就照实说，但把话说明白点
+                        reply = r
+                    }
+                }
+                val finalReply = reply ?: return@runCatching AgentRun(
+                    reply = "连着三次都没收到内容。可能是服务商那边抽了，或者 Key / 模型不对 —— 你到设置里检查一下。",
+                    toolLog = log,
+                    steps = steps,
+                    thinkRounds = round - 1,
+                    usage = AgentApi.Usage(cached, input, output, spent),
+                    reasoning = reasonAll.toString(),
                 )
 
-                cached += reply.usage.cachedTokens
-                input += reply.usage.inputTokens
-                output += reply.usage.outputTokens
-                spent += reply.usage.millis
+                cached += finalReply.usage.cachedTokens
+                input += finalReply.usage.inputTokens
+                output += finalReply.usage.outputTokens
+                spent += finalReply.usage.millis
                 onRound(round)
 
-                if (reply.toolCalls.isEmpty()) {
+                if (finalReply.toolCalls.isEmpty()) {
                     AgentTaskStore.updateRunningTool(conversationId, "", "")
                     return@runCatching AgentRun(
-                        reply = reply.text.ifBlank { "（模型没说话）" },
+                        reply = finalReply.text.ifBlank { "（模型没说话）" },
                         toolLog = log,
                         steps = steps,
                         thinkRounds = round - 1,
@@ -170,9 +204,9 @@ object AgentChat {
                     )
                 }
 
-                messages.put(AgentApi.assistantToolMessage(reply.toolCalls))
+                messages.put(AgentApi.assistantToolMessage(finalReply.toolCalls))
 
-                reply.toolCalls.forEach { call ->
+                finalReply.toolCalls.forEach { call ->
                     val brief = briefArgs(call.args)
                     val label = friendlyName(call.name)
                     onProgress("正在用 " + label)

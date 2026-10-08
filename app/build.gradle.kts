@@ -29,8 +29,8 @@ android {
         //   1.00.0 → 100    1.01.0 → 101    1.02.0 → 102 ……
         // tag 打成 v1.XX（UpdateChecker.isNewer 按 "." 逐段比数字，
         // "1.01" 和 "1.01.0" 比出来是相等，不会误报有新版）。
-        versionCode = 100
-        versionName = "1.00.0"
+        versionCode = 101
+        versionName = "1.01.0"
 
         // 只打 arm64-v8a。
         // 一来机器就是 arm64，多带别的 ABI 纯属白占体积；

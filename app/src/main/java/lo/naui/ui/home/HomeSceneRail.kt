@@ -67,6 +67,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import com.kyant.backdrop.drawPlainBackdrop
+import com.kyant.backdrop.effects.blur
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -154,6 +156,26 @@ fun HomeSceneRail(
     Box(modifier) {
         // ---- 导轨自己的背景 ----
         Box(Modifier.fillMaxSize()) {
+            // ⚠️ 1.00.0：导轨**不再自己画一遍壁纸**，改成采样外壳那一层。
+            //
+            // 原来这儿是 Image(壁纸) + blur(22dp)，两个后果：
+            //   · 全屏壁纸多画一遍（它就是常驻的，一直在屏幕上）
+            //   · 切背景的涟漪画在内容层**下面**，被这张自己的壁纸盖得死死的 ——
+            //     用户报的"渲染时左侧边栏没有动画渲染"就是这个
+            // 采样同一层 + 本地 22dp 模糊之后：涟漪立刻透出来，糊度照旧，省一遍绘制。
+            // 拿不到 backdrop（理论上只有单测/预览）才退回原来那条路。
+            val railBackdrop = lo.naui.ui.component.LocalGlassBackdrop.current
+            if (railBackdrop != null) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .drawPlainBackdrop(
+                            backdrop = railBackdrop,
+                            shape = { androidx.compose.ui.graphics.RectangleShape },
+                            effects = { blur(22f.dp.toPx()) },
+                        )
+                )
+            } else
             // 跟 hero 一样淡过去 —— 换大图时两边一起渐变才不打架
             androidx.compose.animation.Crossfade(
                 targetState = wallpaper,

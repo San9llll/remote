@@ -1,5 +1,9 @@
 package lo.naui.ui.settings
 
+import com.kyant.backdrop.effects.vibrancy
+import com.kyant.backdrop.effects.lens
+import com.kyant.backdrop.effects.blur
+import com.kyant.backdrop.drawBackdrop
 import androidx.compose.foundation.border
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -436,13 +440,44 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
                             label = "bgseg",
                         )
 
-                        // 外框就是一条圆角胶囊（Aster 悬浮底栏那个样子）
+                        // 外框就是一条圆角胶囊（Aster 悬浮底栏那个样子），
+                        // 1.00.0 起按用户要求改成 **Miuix 那套液态玻璃**：
+                        // vibrancy + blur + lens + 默认 highlight，参数照抄本项目已有的
+                        // FloatingBottomBar（它就是 Miuix 官方 example 那套手搭的）。
+                        // ⚠️ Miuix 0.9.3 库里没有现成的玻璃组件（只有一个 example 文件），
+                        // capsule 库也只给形状连续性，所以只能照参数搭。
+                        //
+                        // ⚠️ 坑 #15：颜色必须在**组合期**取好，不能在 onDrawSurface 里读
+                        // MiuixTheme —— DrawScope 里读不到，编译期直接报错。
+                        //
+                        // ⚠️ 官方 FAQ 那个 SIGSEGV（Fatal signal 11）是"已经 drawBackdrop 的
+                        // 组件再挂 layerBackdrop 把自己变成背景源"。这层在内容层里，
+                        // backdrop 录的是外壳背景，不是它自己 —— 没干那事。
+                        val pillShape = RoundedCornerShape(50)
+                        val pillFill = MiuixTheme.colorScheme.surfaceContainer.copy(0.4f)
+                        val pillFillFallback = MiuixTheme.colorScheme.surfaceContainerHigh
+                        val pillBackdrop = lo.naui.ui.component.LocalGlassBackdrop.current
                         BoxWithConstraints(
                             Modifier
                                 .fillMaxWidth()
                                 .height(46.dp)
-                                .clip(RoundedCornerShape(50))
-                                .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+                                .clip(pillShape)
+                                .then(
+                                    if (pillBackdrop != null) {
+                                        Modifier.drawBackdrop(
+                                            backdrop = pillBackdrop,
+                                            shape = { pillShape },
+                                            effects = {
+                                                vibrancy()
+                                                blur(8f.dp.toPx())
+                                                lens(24f.dp.toPx(), 24f.dp.toPx(), true)
+                                            },
+                                            onDrawSurface = { drawRect(pillFill) },
+                                        )
+                                    } else {
+                                        Modifier.background(pillFillFallback)
+                                    }
+                                )
                                 .padding(4.dp),
                         ) {
                             val segW = maxWidth / 3

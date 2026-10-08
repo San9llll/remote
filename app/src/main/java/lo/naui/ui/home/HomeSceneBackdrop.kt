@@ -9,8 +9,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.BlurredEdgeTreatment
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -31,23 +29,24 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
  * "之前它自己先糊一遍再压黑纱，玻璃卡折射出来就是一团黑"。
  * 代价是全屏壁纸每帧画两遍。
  *
- * 现在只画一遍，但把**压黑纱挪到采样层外面**（[HomeSceneDecor]）：
+ * 而且只录**一遍**，同时满足两边要的东西不一样：
  *
  * ```
- * [layerBackdrop 里]  兜底渐变 → 壁纸（可调节模糊）
- * [layerBackdrop 外]  压黑纱 → 导轨那条渐变
- * [再上面]            内容层（卡片 drawBackdrop 采样上面那层）
+ * ① [layerBackdrop 里]  兜底渐变 + 壁纸 + 涟漪          ← 清晰，一点不糊
+ * ② [采样层之上]        把 ① 录下来的那层 drawPlainBackdrop + blur 重放   ← 眼睛看的糊背景
+ * ③ [再上面]            压黑纱 + 导轨渐变（HomeSceneDecor）
+ * ④ [最上面]            内容层，卡片 drawBackdrop 采 ① 的**清晰**原图
  * ```
  *
- * 卡片采到的是**糊过但没压黑**的壁纸，所以既不黑、又跟着背景模糊滑块走；
- * 用户眼睛看到的是纱后面的版本，跟原来一样。全屏壁纸从两遍变一遍。
- *
- * @param bgBlur 背景模糊半径（主题页那个滑块），0 = 不糊
+ * 为什么 ① 必须清晰：lens 折的是**细节**，喂它一张糊过的图就什么都折不出来 ——
+ * 1.00.0 第一版就是卡片采的糊背景，用户看到的成品就是"液态玻璃没生效"。
+ * 而眼睛要的是糊背景，所以 ② 用同一份录制重放一遍 + 一次模糊，
+ * **不重画位图**：全屏壁纸自始至终只画一次。
+ * 纱放 ③ 同理 —— 折进卡片就是一团黑。
  */
 @Composable
 fun HomeSceneBackdrop(
     wallpaper: ImageBitmap?,
-    bgBlur: Dp,
     modifier: Modifier = Modifier,
 ) {
     Box(modifier.fillMaxSize().clipToBounds()) {
@@ -71,16 +70,9 @@ fun HomeSceneBackdrop(
                 bitmap = wallpaper,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .then(
-                        // 0 就别挂 blur 了 —— 挂一个 0dp 的 RenderEffect 也要走一趟离屏
-                        if (bgBlur > 0.dp) {
-                            Modifier.blur(bgBlur, edgeTreatment = BlurredEdgeTreatment.Rectangle)
-                        } else {
-                            Modifier
-                        }
-                    ),
+                // ⚠️ 这儿**不加模糊**：这一张是给卡片折射用的素材，糊了就没细节可折。
+                // 眼睛看到的糊版本由外壳拿这份录制重放一遍 + 模糊得到（AppShell 的 ② 层）。
+                modifier = Modifier.fillMaxSize(),
             )
         }
     }

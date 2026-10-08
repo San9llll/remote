@@ -121,6 +121,18 @@ object BgRipples {
         if (alive.size != list.size) list = alive
     }
 
+    /**
+     * 分界框该有多亮（1 → 0）。
+     *
+     * 1.00.0 曾经当死代码删过它，后来用户要求"分界线改半透明框"，
+     * 那道框就是要跟着涟漪的命（[DURATION_MS] 跑完 + 一点 linger）淡出去 ——
+     * 于是又加回来了。淡出用 LINGER 而不是 DURATION：圈扩到头之后还要留一会儿。
+     */
+    fun edgeAlphaOf(r: Ripple, now: Long = System.currentTimeMillis()): Float {
+        val t = ((now - r.at).toFloat() / LINGER_MS).coerceIn(0f, 1f)
+        return (1f - t) * 0.9f
+    }
+
     fun clear() {
         list = emptyList()
         settledTo = null

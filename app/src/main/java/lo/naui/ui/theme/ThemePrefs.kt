@@ -172,6 +172,27 @@ object Prefs {
 class ThemePrefs(context: Context) {
     private val sp = context.getSharedPreferences("nakour_theme", Context.MODE_PRIVATE)
 
+    // ---- 1.00.0 一次性参数迁移 ----
+    //
+    // ⚠️ 必须排在**所有属性声明前面**：Kotlin 的类体是按声明顺序执行的，
+    // 放到文件后面那个 init 里就晚了 —— cardStyle / glassBlur 那些
+    // `by mutableStateOf(sp.getXxx(默认))` 早就按旧值算完了，改了 sp 也不会生效。
+    //
+    // 要清的是这三个：
+    //   card_style —— 1.00.0 默认从仿玻璃改成液态玻璃，存过 legacy 的机器就永远拿不到新默认
+    //   glass_blur —— 默认从 0 提到 18，存过 0 的机器玻璃会"像贴片不像玻璃"
+    //   glass_lens —— 同理，折射深度为 0 的话卡片根本没有折射，看着就是"玻璃没生效"
+    // 代价：你自己手动调过的这三个值会被覆盖一次，其余（背景样式、配色、圆角…）不动。
+    init {
+        if (sp.getInt("pref_version", 0) < 1) {
+            sp.edit()
+                .remove("card_style")
+                .remove("glass_blur")
+                .remove("glass_lens")
+                .putInt("pref_version", 1)
+                .apply()
+        }
+    }
 
     init {
         WallpaperColorTheme.load(sp)

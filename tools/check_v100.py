@@ -29,6 +29,7 @@ F = {
     "api": SRC + "/agent/AgentApi.kt",
     "store": SRC + "/agent/AgentStore.kt",
     "chat": SRC + "/agent/AgentChat.kt",
+    "rail": SRC + "/ui/home/HomeSceneRail.kt",
 }
 
 
@@ -146,21 +147,20 @@ def main():
     need("fun prune(" in ripc, "得有 prune 把跑完的摘掉 —— 摘空那一下才会通知外壳扶正背景")
     need("settledTo" in ripc, "得有 settledTo 告诉外壳最后该换成哪张")
     forbid("fun add(" in ripc, "BgRipples.add 没人用，属于死代码")
-    forbid("edgeAlphaOf" in ripc, "edgeAlphaOf 没人用，属于死代码")
+    need("fun edgeAlphaOf(" in ripc, "edgeAlphaOf 得在 —— 半透明分界框靠它淡出")
+    need("edgeAlphaOf" in shell, "外壳的分界框要读 edgeAlphaOf")
     need("BgRipples.fire(" in shell and "pendingWallpaper" not in shell.replace(" ", ""),
          "外壳应该 fire(图) 入队，不该再有 pendingWallpaper 这个单槽位")
 
-    # ---------- ④ 帧驱动不许常驻空转 ----------
-    i_rl = idx(shell, "private fun RippleLayer")
-    body = shell[i_rl:] if i_rl >= 0 else ""
-    if body:
-        nxt = body.find("\nprivate ", 10)
-        body = body[:nxt] if nxt > 0 else body
-    forbid("LaunchedEffect(Unit)" in body, "RippleLayer 里不许再有 LaunchedEffect(Unit) 的常驻循环")
-    need("LaunchedEffect(running)" in body, "帧循环要挂在 running 上，队列一空就退出")
-    forbid("delay(33)" in body, "还在用固定 delay(33) 轮询（应该用 withFrameNanos 跟渲染对齐）")
-    need("% 2 == 0" in body, "30fps 那刀得留着：现在涟漪每帧带着壁纸模糊+backdrop 重录一起跑")
-    need("withFrameNanos" in body, "帧循环应该用 withFrameNanos 驱动")
+    # ---------- ④ 帧驱动：全外壳只有一个，且不常驻 ----------
+    forbid("LaunchedEffect(Unit)" in shell, "还有 LaunchedEffect(Unit) 的常驻循环")
+    forbid("delay(33)" in shell, "还在用固定 delay(33) 轮询（应该 withFrameNanos 跟帧对齐）")
+    n_frame = shell.count("withFrameNanos")
+    need(n_frame == 1, "withFrameNanos 应该只出现 1 次（涟漪层被画两遍 = 两个空转协程就是当年的病灶），现在 %d 次" % n_frame)
+    need("% 2 == 0" in shell, "30fps 那刀得留着（坑 #45 是拿实机卡顿换来的）")
+    need("rippleFrame.intValue++" in shell, "帧号要在驱动里推")
+    need("RippleLayer(shown = shownWallpaper, frame = rippleFrame)" in shell, "涟漪层要收外壳的帧号")
+    need("RippleRing(frame = rippleFrame)" in shell, "分界框要收同一个帧号（跟圈对得上）")
 
     # ---------- ⑤ 模糊可调，三处共用一个数 ----------
     prefs = read("prefs")
@@ -169,10 +169,12 @@ def main():
     need("?: Liquid" in prefs, "卡片风格默认值应该是液态玻璃")
     need('sp.getFloat("glass_blur", 18f)' in prefs, "glassBlur 默认值应该跟着改成 18（0 的话液态玻璃像贴片）")
     need("prefs.bgBlur" in read("theme"), "主题页得有背景模糊那个滑块")
-    need('bgBlur * 0.8f' in shell or "bgBlur * 0.8f" in shell, "内容页底图应该按 bgBlur*0.8 走（保持原来 26/32 的比例）")
+    # ⚠️ 这条是上一版设计的遗留：那时底图在采样层里预糊 0.8 倍。
+    # 现在底图也归入"清晰录制"，糊由 ② 那层统一做，所以反过来查。
+    forbid("bgBlur * 0.8f" in shell, "内容页底图不该再预糊（糊交给 ② 重放那一趟）")
     forbid("blur(32.dp" in read("bg"), "壁纸的模糊半径不该再写死 32dp")
     forbid("blur(26.dp" in shell, "内容页底图的模糊半径不该再写死 26dp")
-    need("bgBlur: Dp" in read("bg"), "HomeSceneBackdrop 要接收 bgBlur 参数")
+    forbid("bgBlur" in strip_code(read("bg")), "HomeSceneBackdrop 不该再吃 bgBlur（它只录清晰图）")
 
     # 圆心坐标：必须同一套坐标系
     # ⚠️ 用**去掉注释**的版本看 —— 注释里会提到老写法（screenHeightDp），
@@ -214,6 +216,39 @@ def main():
         "grep -rln 'BuildDeps\\|DevToolsCard\\|deployToWorkspace' %s 2>/dev/null" % SRC
     ).read().strip()
     need(not leftovers, "还有文件引用已删掉的东西：" + leftovers.replace("\n", ", "))
+
+    # ---------- ⑧' 第二次返工：玻璃必须折**清晰**背景 ----------
+    #
+    # 上一版我把模糊放进采样层里（壁纸先糊再录），结果 lens 对着糊图折 ——
+    # 什么都折不出来，用户看到的成品就是"液态玻璃没生效"。
+    # 现在：① 采样层只录清晰图；眼睛要的糊背景由 ② 重放同一份录制 + 一次模糊得到
+    # （不重画位图）。
+    need("drawPlainBackdrop" in shell, "外壳少了『重放录制层 + 模糊』那一层（②层）")
+    need("effects = { blur(bgBlurDp.toPx()) }" in shell, "②层要用同一个 bgBlur 模糊")
+    need("import com.kyant.backdrop.effects.blur" in read("shell"),
+         "effects{} 里的 blur 是库的扩展函数，必须有 com.kyant.backdrop.effects.blur 的 import")
+    forbid("Modifier.blur" in read("shell"), "外壳里不该再有 Modifier.blur —— 壁纸不该被画两遍")
+    forbid("blur(" in strip_code(read("bg")),
+           "采样层（壁纸那张）里不许出现模糊，糊了卡片就没细节可折")
+    forbid("bgBlur" in strip_code(read("bg")), "HomeSceneBackdrop 不该再吃 bgBlur（它现在只录清晰图）")
+    # 分界框：描边，不贴位图、不带模糊带
+    need("private fun RippleRing(" in shell, "缺 RippleRing（半透明分界框）")
+    need("Stroke(" in shell, "分界框要用描边")
+    forbid("BLUR_BAND_PX" in shell, "分界框改用半透明描边后，模糊带常量整个没用了（留着就是死代码）")
+
+    # 导轨：采样同一层，不再自己画壁纸
+    rail = read("main").split("MainActivity")[0]  # 占位，真正检查在下面按文件读
+    rail_src = strip_code(open(F["shell"].replace("ui/shell/AppShell.kt", "ui/home/HomeSceneRail.kt"),
+                               encoding="utf-8").read())
+    need("drawPlainBackdrop" in rail_src, "导轨要改成采样外壳那层（否则涟漪被它自己的壁纸挡住）")
+    need("import com.kyant.backdrop.effects.blur" in
+         open(F["shell"].replace("ui/shell/AppShell.kt", "ui/home/HomeSceneRail.kt"), encoding="utf-8").read(),
+         "导轨 effects{} 里的 blur 也要库的 import")
+
+    # 旧配置迁移
+    need('sp.getInt("pref_version"' in read("prefs"), "ThemePrefs 里要有 pref_version 一次性迁移")
+    for k in ("card_style", "glass_blur", "glass_lens"):
+        need('remove("%s")' % k in read("prefs"), "迁移要清掉 %s" % k)
 
     # ---------- ⑧ 跨文件顶层函数：用了就必须 import ----------
     #

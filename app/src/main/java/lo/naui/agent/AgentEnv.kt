@@ -25,10 +25,18 @@ enum class AgentEnv(val id: String, val label: String, val summary: String) {
     }
 }
 
-/** 工具跑出来的结果 */
+/**
+ * 工具跑出来的结果。
+ *
+ * [decision] 非空 = **这事儿还没干，要用户点头**：
+ * 上层（AgentChat）看到它就走确认通道，同意后调 `decision.run()` 才真的执行。
+ * 以前这类"要问人"是塞在 [output] 里的一个字符串标记（`__NEED_ROOT__|命令|理由`），
+ * 换掉的理由写在 AgentRisk.kt 顶上。
+ */
 data class ToolResult(
     val ok: Boolean,
     val output: String,
+    val decision: RiskDecision? = null,
 )
 
 /**
@@ -38,13 +46,8 @@ data class ToolResult(
  * 权限按当前能拿到的最高来（root → Shizuku → 普通），
  * 沙箱模式再额外套一层路径围栏。
  */
-/**
- * "这条命令要 root" 的标记。
- *
- * 约定的格式：`__NEED_ROOT__|<命令>|<理由>`
- * —— 上层拆一下就拿到弹窗要显示的两样东西。
- */
-const val NEED_ROOT_PREFIX = "__NEED_ROOT__|"
+// NEED_ROOT_PREFIX 这个字符串协议已经删了 —— 换成 AgentRisk.kt 里的
+// RiskDecision 对象。要 root 的那条路见 AgentRunner.shell。
 
 object AgentRunner {
 
@@ -101,15 +104,27 @@ object AgentRunner {
             //
             // 弹窗里要显示：**具体命令** + **Agent 给的理由**。
             //
-            // 这儿不直接执行，而是返回一个带特殊前缀的结果 ——
-            // 让上层（AgentChat）看见它就转去走 askUser 那套弹窗。
+            // 这儿不直接执行，而是带回一个待批准的决策对象 ——
+            // 让上层（AgentChat）看见 decision 就走唯一那条确认通道。
             // 为什么用标记而不是在这里弹：这儿在后台线程，弹不了窗。
             if (needRoot && env == AgentEnv.Host &&
                 Privilege.level(ctx) != PrivLevel.Normal
             ) {
-                val payload = NEED_ROOT_PREFIX + command.replace("|", " ") +
-                    "|" + reason.replace("|", " ").replace("\n", " ")
-                return@runCatching ToolResult(false, payload)
+                // 这儿在后台线程，弹不了窗（坑 #39），所以**不执行也不弹**：
+                // 带回一个类型化的待批准动作，命令原文就放在 detail 里给人看 ——
+                // 不再拼 `|` 分隔的字符串，命令里带竖线也不会串味。
+                return@runCatching ToolResult(
+                    ok = false,
+                    output = "这条要 root，已经挂起等用户同意；同意后会**自动执行**，不用你再发一遍。",
+                    decision = RiskDecision(
+                        kind = RiskKind.Root,
+                        detail = command,
+                        reason = reason,
+                        note = "它会拿到系统最高权限，能改任何东西",
+                        consequence = "跑错了可能让系统出问题、或者把你的数据弄没。",
+                        run = { rootRun(ctx, command) },
+                    ),
+                )
             }
 
             if (env == AgentEnv.Sandbox) {
@@ -129,6 +144,19 @@ object AgentRunner {
                 )
             }
         }.getOrElse { ToolResult(false, "执行失败：" + (it.message ?: it.javaClass.simpleName)) }
+    }
+
+    /**
+     * 用户同意之后，把那条要 root 的命令真的跑掉。
+     *
+     * 单独抽出来是因为它现在被 RiskDecision.run 调 ——
+     * 之前这段逻辑写在 AgentChat 里（拆字符串 + Privilege.exec + 拼报错），
+     * 安全策略散在两处，改一处忘一处。
+     */
+    suspend fun rootRun(ctx: Context, command: String): ToolResult = withContext(Dispatchers.IO) {
+        val out = runCatching { Privilege.exec(ctx, command) }.getOrNull()
+        if (out != null) ToolResult(true, clip(out))
+        else ToolResult(false, "提权执行失败（su 没拿到？）")
     }
 
     /** 读文件 */
@@ -205,51 +233,6 @@ object AgentRunner {
             }
             ToolResult(true, clip(sb.toString()))
         }.getOrElse { ToolResult(false, "批量读失败：" + (it.message ?: "")) }
-    }
-
-    /**
-     * 按文件名找。
-     *
-     * 用 `find`，但把常见坑（权限报错刷屏、符号链接绕圈）都处理了。
-     */
-    suspend fun findFiles(
-        ctx: Context,
-        env: AgentEnv,
-        root: String,
-        namePattern: String,
-        maxDepth: Int = 5,
-    ): ToolResult = withContext(Dispatchers.IO) {
-        runCatching {
-            val base = if (root.isBlank()) "." else root
-            // 用 -name 匹配，2>/dev/null 挡掉权限报错
-            val cmd = "find " + q(base) + " -maxdepth " + maxDepth.coerceIn(1, 12) +
-                " -name " + q(namePattern) + " 2>/dev/null | head -100"
-            val out = runLocalShell(ctx, guard(cmd, sandboxRoot(ctx)), sandboxRoot(ctx), null)
-                .ifBlank { Privilege.exec(ctx, cmd).orEmpty() }
-            ToolResult(true, clip(out.ifBlank { "（没找到）" }))
-        }.getOrElse { ToolResult(false, "找文件失败：" + (it.message ?: "")) }
-    }
-
-    /**
-     * 在文件内容里搜。
-     *
-     * 比让 AI 一个个 read_file 快得多。
-     */
-    suspend fun grepText(
-        ctx: Context,
-        env: AgentEnv,
-        root: String,
-        pattern: String,
-        fileGlob: String = "*",
-    ): ToolResult = withContext(Dispatchers.IO) {
-        runCatching {
-            val base = if (root.isBlank()) "." else root
-            val cmd = "grep -rn --include=" + q(fileGlob) + " -e " + q(pattern) + " " + q(base) +
-                " 2>/dev/null | head -80"
-            val out = runLocalShell(ctx, guard(cmd, sandboxRoot(ctx)), sandboxRoot(ctx), null)
-                .ifBlank { Privilege.exec(ctx, cmd).orEmpty() }
-            ToolResult(true, clip(out.ifBlank { "（没匹配到）" }))
-        }.getOrElse { ToolResult(false, "搜索失败：" + (it.message ?: "")) }
     }
 
     /**

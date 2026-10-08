@@ -69,8 +69,7 @@ object AgentChat {
         onDelta: (String) -> Unit = {},
         /** 每转完一轮通知一声（界面拿它更新"思考了 N 次"） */
         onRound: (Int) -> Unit = {},
-        /** 碰上危险动作时问用户（策略是"每次问"才会调） */
-        askUser: (suspend (DangerGuard.Hit) -> Boolean)? = null,
+        // askUser 这个参数没了：要问用户就带回 RiskDecision，由上面那条通道统一处理
     ): Result<AgentRun> = withContext(Dispatchers.IO) {
         runCatching {
             // 0 / 负数 = 不限；但真无限会跑飞，所以压一个 500 的硬顶
@@ -219,7 +218,7 @@ object AgentChat {
 
                     val t0 = System.currentTimeMillis()
                     var result = AgentTools.run(
-                        ctx, env, call.name, call.args, askUser,
+                        ctx, env, call.name, call.args,
                         // 逐行看输出，认出下载进度和速度就更新到界面上
                         onLine = { line ->
                             Progress.parse(line)?.let { AgentTaskStore.updateToolProgress(conversationId, it) }
@@ -234,46 +233,29 @@ object AgentChat {
                     // 用户的要求：**勾了 root 也默认只用普通权限和沙箱**，
                     // 只有 Agent 说"这条必须 su"时才拦。
                     // 弹窗中间显示具体命令、下面显示它给的理由。
-                    if (!result.ok && result.output.startsWith(NEED_ROOT_PREFIX)) {
-                        val payload = result.output.removePrefix(NEED_ROOT_PREFIX)
-                        val cmd = payload.substringBefore("|")
-                        val why = payload.substringAfter("|", "")
-
+                    // ---- 要用户点头的，全走这一条通道 ----
+                    //
+                    // root、危险命令、删除、写 sdcard 外……都带 RiskDecision 上来，
+                    // 这儿统一：挂到 Store 上 → 界面弹窗 → 等点 → 同意才跑 decision.run()。
+                    // 超时 90 秒当拒绝（用户可能压根没看手机，不能一直吊着会话）。
+                    result.decision?.let { d ->
                         val gate = kotlinx.coroutines.CompletableDeferred<Boolean>()
-                        AgentTaskStore.pendingConfirm = AgentTaskStore.ConfirmRequest(
-                            conversationId = conversationId,
-                            hit = lo.naui.agent.DangerGuard.Hit(
-                                category = lo.naui.agent.DangerGuard.Category(
-                                    id = "root",
-                                    label = "需要 root",
-                                    note = "它会拿到系统最高权限，能改任何东西",
-                                    consequence = "跑错了可能让系统出问题、或者把你的数据弄没。",
-                                    regexes = emptyList(),
-                                ),
-                                // ⚠️ Hit 的字段叫 matched，不是 target
-                                matched = cmd,
-                            ),
-                            answer = gate,
-                            command = cmd,
-                            reason = why,
-                            forRoot = true,
-                        )
-                        AgentTaskStore.updateRunningTool(
-                            conversationId, "", "等你同意用 root"
-                        )
+                        AgentTaskStore.pendingConfirm =
+                            AgentTaskStore.ConfirmRequest(conversationId, d, gate)
+                        AgentTaskStore.updateRunningTool(conversationId, "", "等你确认：" + d.title())
+                        onProgress("等你确认：" + d.title())
 
-                        val agreed = gate.await()
+                        val agreed = kotlinx.coroutines.withTimeoutOrNull(90_000L) { gate.await() } ?: false
+                        AgentTaskStore.pendingConfirm = null
                         result = if (agreed) {
-                            val out = runCatching {
-                                lo.naui.sys.Privilege.exec(ctx, cmd)
-                            }.getOrNull()
-                            if (out != null) {
-                                ToolResult(true, out)
-                            } else {
-                                ToolResult(false, "提权执行失败（su 没拿到？）")
-                            }
+                            AgentTaskStore.progress(conversationId, "你同意了，继续…")
+                            d.run()
                         } else {
-                            ToolResult(false, "用户不同意用 root。换个不需要 root 的办法，或者跟他解释清楚为什么非要 root。")
+                            AgentTaskStore.progress(conversationId, "没等到确认，跳过这个动作")
+                            ToolResult(
+                                false,
+                                d.refusedText() + "\n（也可能是他没看到手机，90 秒超时自动跳过的。）",
+                            )
                         }
                     }
                     val cost = System.currentTimeMillis() - t0
@@ -367,6 +349,16 @@ object AgentChat {
                 // 下载这两条都是"秒回"的，别写成"正在下载…"骗人以为在等
                 AgentTools.DOWNLOAD -> "正在起后台下载"
                 AgentTools.DOWNLOAD_CHECK -> "正在看下载进度"
+                AgentTools.FILE_OP -> "正在动文件"
+                AgentTools.DELETE -> "在等你同意删除"
+                AgentTools.TREE -> "正在看目录结构"
+                AgentTools.STAT -> "正在看文件信息"
+                AgentTools.ARCHIVE -> "正在弄压缩包"
+                AgentTools.APPS -> "正在列已装的 app"
+                AgentTools.OPEN -> "正在打开"
+                AgentTools.CLIPBOARD -> "正在动剪贴板"
+                AgentTools.NOTICE -> "正在发通知"
+                AgentTools.SHOT -> "正在截屏"
                 else -> "正在干活"
             }
         }
@@ -396,6 +388,16 @@ object AgentChat {
         AgentTools.DEVICE -> "看设备信息"
         AgentTools.DOWNLOAD -> "后台下载"
         AgentTools.DOWNLOAD_CHECK -> "问下载进度"
+        AgentTools.FILE_OP -> "文件操作"
+        AgentTools.DELETE -> "删除"
+        AgentTools.TREE -> "看目录树"
+        AgentTools.STAT -> "看文件信息"
+        AgentTools.ARCHIVE -> "压缩包"
+        AgentTools.APPS -> "列应用"
+        AgentTools.OPEN -> "打开应用/文件"
+        AgentTools.CLIPBOARD -> "剪贴板"
+        AgentTools.NOTICE -> "发通知"
+        AgentTools.SHOT -> "截屏"
         else -> name
     }
 

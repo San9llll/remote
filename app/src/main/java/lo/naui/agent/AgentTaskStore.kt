@@ -197,24 +197,18 @@ object AgentTaskStore {
 
     var pendingConfirm by mutableStateOf<ConfirmRequest?>(null)
 
+    /**
+     * 一次待批准的请求。
+     *
+     * 1.02.0 重构：以前这儿塞的是 `hit: DangerGuard.Hit` 外加 command / reason / forRoot
+     * 三个散装字段 —— 因为 root 那条路是从 output 里拆字符串来的，
+     * 只能一项一项塞。现在全部收进一个 [RiskDecision]：
+     * 标题、给人看的内容、理由、后果、**同意后要跑什么**，都在里面。
+     */
     data class ConfirmRequest(
         val conversationId: String,
-        val hit: DangerGuard.Hit,
+        val decision: RiskDecision,
         val answer: kotlinx.coroutines.CompletableDeferred<Boolean>,
-        /**
-         * 要执行的具体命令 —— 弹窗中间显示这个。
-         *
-         * 用户的要求："提示中间是 agent 具体需要执行的代码"。
-         */
-        val command: String = "",
-        /**
-         * Agent 给的理由 —— 弹窗下面显示这个。
-         *
-         * 用户的要求："下面是 agent 给出的理由"。
-         */
-        val reason: String = "",
-        /** 这次是不是"要 root"单独的确认（而不是危险命令） */
-        val forRoot: Boolean = false,
     )
 
     fun answerConfirm(ok: Boolean) {

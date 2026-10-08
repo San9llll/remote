@@ -107,23 +107,6 @@ class AgentTaskService : Service() {
             onReasoning = { r -> AgentTaskStore.appendReasoning(convId, r) },
             onDelta = { d -> AgentTaskStore.appendText(convId, d) },
             onRound = { n -> AgentTaskStore.setRounds(convId, n) },
-            // 危险动作：把请求挂到 Store 上，等界面弹窗让用户点
-            askUser = { hit ->
-                val gate = kotlinx.coroutines.CompletableDeferred<Boolean>()
-                AgentTaskStore.pendingConfirm = AgentTaskStore.ConfirmRequest(convId, hit, gate)
-                AgentTaskStore.progress(convId, "等你确认：" + hit.category.label)
-                notify(buildNotification("等你确认：" + hit.category.label))
-
-                // 最多等 90 秒 —— 用户可能压根没看手机，别一直吊着
-                val ok = kotlinx.coroutines.withTimeoutOrNull(90_000L) { gate.await() } ?: false
-                AgentTaskStore.pendingConfirm = null
-                if (ok) {
-                    AgentTaskStore.progress(convId, "你同意了，继续…")
-                } else {
-                    AgentTaskStore.progress(convId, "没等到确认，跳过这个动作")
-                }
-                ok
-            },
         )
 
         try {

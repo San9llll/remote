@@ -163,10 +163,11 @@ fun AgentScreen(
     var sheetOpen by remember { mutableStateOf(false) }
     // 危险动作的确认：AI 那边挂起，等用户点。
     //
-    // 取的是**整个请求**（不只是 hit）—— 因为弹窗还要显示
-    // Agent 给的理由（req.reason）和它想跑的那条命令（req.command）。
+    // 要显示的东西全在 decision 里：标题、具体命令/路径、它给的理由、后果。
+    // （重构前这儿取的是 req.hit + req.command + req.reason + req.forRoot 四样散装字段 ——
+    //   因为 root 那条是从 output 字符串里拆出来的，只能一项一项塞进来。）
     val req = lo.naui.agent.AgentTaskStore.pendingConfirm
-    val confirmHit = req?.hit
+    val confirmDecision = req?.decision
     val listState = rememberLazyListState()
 
     // 一个文件按钮就够了（图片和文本都从这儿进，按类型自己分辨）
@@ -527,7 +528,7 @@ fun AgentScreen(
     }
 
     // ---- 危险动作确认 ----
-    confirmHit?.let { hit ->
+    confirmDecision?.let { d ->
         // 底层遮罩：暗度可在主题里调（"弹窗底层背景"）
         val scrim = lo.naui.ui.theme.Prefs.current?.dialogScrim ?: 0.55f
         // 颜色得在这儿先取出来 —— onDrawSurface 是 DrawScope，里头读不了 MiuixTheme
@@ -601,7 +602,7 @@ fun AgentScreen(
                 // 标题：普通的危险命令是「危险请求」，
                 // 要 root 的那种单独说清楚（用户要看懂这两者不一样）
                 Text(
-                    if (req.forRoot) "它想用 root" else "危险请求",
+                    d.title(),
                     fontSize = 17.sp,
                     fontWeight = FontWeight.SemiBold,
                 )
@@ -615,7 +616,7 @@ fun AgentScreen(
                             .padding(horizontal = 10.dp, vertical = 4.dp),
                     ) {
                         Text(
-                            hit.category.label,
+                            d.note,
                             fontSize = 11.5.sp,
                             color = MiuixTheme.colorScheme.error,
                             fontWeight = FontWeight.Medium,
@@ -623,7 +624,7 @@ fun AgentScreen(
                     }
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        hit.category.note,
+                        "点了「允许」才会真的执行",
                         fontSize = 11.sp,
                         color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                     )
@@ -633,7 +634,9 @@ fun AgentScreen(
                 //
                 // 用户的要求："提示中间是 agent 具体需要执行的代码"。
                 // root 那种用 req.command（整条命令），
-                // 普通的还用 hit.matched（命中的那一小段，太长的命令全摆出来反而看不清重点）。
+                // detail 就是**原文**：要 root 的命令 / 要删的路径+规模 / 命中的那一段。
+                // 重构前它是 substringBefore('|') 拆出来的 —— 命令里带竖线就串味，
+                // 摆给用户看的和他批准的不是同一条。
                 Spacer(Modifier.height(12.dp))
                 Box(
                     Modifier
@@ -643,8 +646,7 @@ fun AgentScreen(
                         .padding(12.dp),
                 ) {
                     Text(
-                        if (req.forRoot && req.command.isNotBlank()) req.command
-                        else hit.matched,
+                        d.detail,
                         fontSize = 12.sp,
                         fontFamily = FontFamily.Monospace,
                         color = Color(0xFFFF8A80),
@@ -654,8 +656,8 @@ fun AgentScreen(
                 // ---- 下面：Agent 给的理由 ----
                 //
                 // 用户的要求："下面是 agent 给出的理由"。
-                // 只有它主动说"这次要 root"时才有。
-                if (req.reason.isNotBlank()) {
+                // 现在四类（root / 危险命令 / 删除 / 写 sdcard 外）都可能带理由。
+                if (d.reason.isNotBlank()) {
                     Spacer(Modifier.height(12.dp))
                     Box(
                         Modifier
@@ -672,7 +674,7 @@ fun AgentScreen(
                             )
                             Spacer(Modifier.height(4.dp))
                             Text(
-                                req.reason,
+                                d.reason,
                                 fontSize = 12.sp,
                                 color = MiuixTheme.colorScheme.onSurface,
                             )
@@ -682,7 +684,7 @@ fun AgentScreen(
 
                 Spacer(Modifier.height(10.dp))
                 Text(
-                    hit.category.consequence,
+                    d.consequence,
                     fontSize = 11.5.sp,
                     color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                 )

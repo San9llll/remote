@@ -200,8 +200,13 @@ def main():
 
     store = read("store")
     m = re.search(r'TOOL_NOTE = """(.*?)"""', store, re.S)
-    need(m is not None and len(m.group(1)) < 800,
-         "系统提示词应该瘦到 800 字符以内（每次请求都发，直接决定首字延迟）")
+    # 上限从 800 调到 1200，理由是这轮加了 10 个工具、TOOL_NOTE 必须告诉模型它们的存在
+    # —— 这不是"放宽就过了"：这段文本和工具 schema 都在请求的**最前面**，
+    # 属于 DeepSeek 那套前缀缓存能命中的部分（项目里 usage.cachedTokens 就是拿它的），
+    # 命中后 prefill 几乎不花时间。真花钱的是每次都变的会话正文。
+    # 再涨就要动工具描述了，那时候该删工具而不是删说明。
+    need(m is not None and len(m.group(1)) < 1200,
+         "系统提示词该压在 1200 字符内（超出说明：工具太多就到该收敛的时候，不是继续放宽）")
     if m:
         notes.append("TOOL_NOTE 现在 %d 字符" % len(m.group(1)))
     need("env.sh" not in store, "依赖下载功能删了，提示词里不该再提 env.sh")

@@ -36,6 +36,28 @@ private fun str(desc: String): JSONObject =
 private fun int(desc: String): JSONObject =
     JSONObject().put("type", "integer").put("description", desc)
 
+private fun boolean(desc: String): JSONObject =
+    JSONObject().put("type", "boolean").put("description", desc)
+
+private fun arr(desc: String): JSONObject =
+    JSONObject()
+        .put("type", "array")
+        .put("description", desc)
+        .put("items", JSONObject().put("type", "string"))
+
+/**
+ * action 那种"一个工具几个动作"的写法。
+ *
+ * 为什么把 4 个文件操作塞进一个工具而不是开 4 个：
+ * 工具 schema 每次请求都要发一遍，20 个工具和 12 个工具差着几百 token 的
+ * prefill —— 而模型对 enum 参数的把握不比独立工具差（batch_shell 已经验证过）。
+ */
+private fun act(desc: String, vararg options: String): JSONObject =
+    JSONObject()
+        .put("type", "string")
+        .put("description", desc)
+        .put("enum", org.json.JSONArray(options as Array<String>))
+
 /**
  * 内嵌工具链。
  *
@@ -58,6 +80,18 @@ object AgentTools {
     const val DEVICE = "device_info"
     const val DOWNLOAD = "start_download"
     const val DOWNLOAD_CHECK = "check_download"
+
+    // 1.02.0 新增：把"动文件 / 动设备"从 shell 里捞出来，走围栏、走结构化确认
+    const val FILE_OP = "file_op"
+    const val DELETE = "delete_path"
+    const val TREE = "tree"
+    const val STAT = "stat"
+    const val ARCHIVE = "archive"
+    const val APPS = "list_apps"
+    const val OPEN = "open_app"
+    const val CLIPBOARD = "clipboard"
+    const val NOTICE = "notify"
+    const val SHOT = "screenshot"
 
     val ALL: List<AgentTool> = listOf(
         AgentTool(
@@ -130,21 +164,30 @@ object AgentTools {
         AgentTool(
             name = FIND,
             description = "按**文件名**找文件。比如找所有 .log、所有 build.gradle.kts。" +
-                "不知道东西在哪的时候先用它，别一层层 ls 翻。",
+                "不知道东西在哪的时候先用它，别一层层 ls 翻。\n" +
+                "1.02.0 起这条**不再靠 shell 里的 find**（没装 Termux 就得赌系统有没有 toybox），" +
+                "改成自己遍历 + 走路径围栏；找不到时会回\"扫了多少条目、几个目录读不了\"，" +
+                "那比干巴巴一句\"没找到\"有用。",
             properties = JSONObject()
                 .put("root", str("从哪儿开始找，默认当前目录"))
-                .put("name", str("文件名匹配，支持通配符，比如 *.kt、config.*"))
-                .put("max_depth", int("最多往下找几层，默认 5")),
+                .put("name", str("文件名匹配，支持通配符，比如 *.kt、config.*（不是正则）"))
+                .put("max_depth", int("最多往下找几层，默认 5"))
+                .put("limit", int("最多回多少个，默认 100（到数会明说截断了）")),
             required = listOf("name"),
         ),
         AgentTool(
             name = GREP,
-            description = "在**文件内容**里搜关键词，返回匹配的行和行号。" +
-                "找「这东西在哪定义、在哪用到」就靠它，比读一堆文件快。",
+            description = "在**文件内容**里搜关键词，返回 文件:行号: 内容。" +
+                "找「这东西在哪定义、在哪用到」就靠它，比读一堆文件快。\n" +
+                "1.02.0 起不再依赖 shell 的 grep，自己遍历 + 走围栏；" +
+                "带 context 参数可以一次把上下文行也拿到，省掉\"搜到再去 read_file\"那一轮。",
             properties = JSONObject()
                 .put("root", str("从哪个目录找，默认当前目录"))
-                .put("pattern", str("要找的内容（普通字符串，不是正则）"))
-                .put("file_glob", str("只搜哪些文件，默认 * ，比如 *.kt")),
+                .put("pattern", str("要找的内容（普通字符串包含匹配，不是正则）"))
+                .put("file_glob", str("只搜哪些文件，默认 * ，比如 *.kt"))
+                .put("context", int("每个命中带上下几行，默认 0（最多 4）"))
+                .put("ignore_case", boolean("忽略大小写，默认 false"))
+                .put("limit", int("最多回几个命中，默认 60（到数会明说截断了）")),
             required = listOf("pattern"),
         ),
         AgentTool(
@@ -180,9 +223,121 @@ object AgentTools {
                 .put("id", str("start_download 返回的那个 id。留空就列最近的全部任务")),
             required = emptyList(),
         ),
+        AgentTool(
+            name = FILE_OP,
+            description = "文件/目录操作：**复制、移动、改名、建目录**。走路径围栏，" +
+                "沙箱模式下外面一律拒 —— **别再用 run_shell 拼 cp/mv/mkdir 了**，" +
+                "那样子命令不过围栏，也不算真在沙箱里。\n" +
+                "改名就是 move，src 和 dst 同一个目录、换个名字。\n" +
+                "删除是另一个工具 delete_path（要用户点同意），别在这儿删。",
+            properties = JSONObject()
+                .put("action", act("要干什么", "copy", "move", "mkdir"))
+                .put("src", str("源路径（mkdir 时这儿就是要建的目录路径）"))
+                .put("dst", str("目标路径（copy/move 才要，mkdir 不用填）")),
+            required = listOf("action", "src"),
+        ),
+        AgentTool(
+            name = DELETE,
+            description = "删除文件或目录。**这条一定会弹给用户确认**，你照常调用就行，" +
+                "不用自己劝自己「为了安全我不删」。\n" +
+                "删目录必须显式给 recursive=true，否则只让删单个文件 —— " +
+                "这是故意的：整棵子树没了是不可逆的。\n" +
+                "路径写错就是一片文件没了，**动手前先用 tree 或 stat 确认一遍**。",
+            properties = JSONObject()
+                .put("path", str("要删的路径"))
+                .put("recursive", boolean("目录要不要整个删（默认 false，只删单文件）"))
+                .put("reason", str("为什么要删 —— 会显示在确认弹窗上给用户看")),
+            required = listOf("path"),
+        ),
+        AgentTool(
+            name = TREE,
+            description = "一次看一棵**目录树**（带层级、大小）。\n" +
+                "比一层层 list_dir 快得多 —— 想知道「这底下到底有什么」先用它，" +
+                "别 cat/ls 来回问五六轮。深度默认 3 层、节点数封顶，" +
+                "要看更深把 depth 调大或者从某个子目录再问。",
+            properties = JSONObject()
+                .put("path", str("从哪个目录开始，默认当前目录"))
+                .put("depth", int("往下几层，默认 3（最多 6）"))
+                .put("max_nodes", int("最多列多少个条目，默认 200（最多 3000）")),
+            required = emptyList(),
+        ),
+        AgentTool(
+            name = STAT,
+            description = "看一个东西的**元信息**：类型、大小、改动时间、读写权限；" +
+                "是图片会带尺寸格式，是 APK 会带包名/版本/minSdk/权限清单，是文本会带行数。\n" +
+                "「这个 apk 是什么包」「这图多大」「这文件能不能写」都用它，一次搞定。",
+            properties = JSONObject().put("path", str("文件路径")),
+            required = listOf("path"),
+        ),
+        AgentTool(
+            name = ARCHIVE,
+            description = "压缩包：list 看里面有什么（不解压）、unpack 解压、pack 打包成 zip。\n" +
+                "支持 zip / jar / apk / tar / tar.gz / gz。\n" +
+                "⚠️ **7z 做不了**（项目没引 LZMA 依赖），碰到 7z 直接告诉用户，别硬试。\n" +
+                "解压带 zip-slip 防护：包里想写到目标目录外面的条目会被丢掉并计数。",
+            properties = JSONObject()
+                .put("action", act("要干什么", "list", "unpack", "pack"))
+                .put("path", str("压缩包路径（pack 时这是**输出**的 zip 路径）"))
+                .put("out_dir", str("解压到哪儿（unpack 才要，默认解到压缩包同级的同名目录）"))
+                .put("inputs", arr("要打包进去的路径列表（pack 才要）")),
+            required = listOf("action", "path"),
+        ),
+        AgentTool(
+            name = APPS,
+            description = "列这台机器上**能启动的 app**（显示名 → 包名），可按关键词过滤。\n" +
+                "想打开某个 app 但不知道包名时先问它，别猜包名。",
+            properties = JSONObject().put("keyword", str("过滤关键词（应用名或包名片段），留空列全部")),
+            required = emptyList(),
+        ),
+        AgentTool(
+            name = OPEN,
+            description = "打开一个东西：包名、http(s) 链接、文件绝对路径、或者应用显示名" +
+                "（不是包名时会按名字模糊找）。\n" +
+                "「帮我装这个 apk」「打开这张图」「跳到这个网址」都用它，" +
+                "文件会自动过 FileProvider 共享（直接发 file:// 路径系统会拦）。",
+            properties = JSONObject().put("target", str("包名 / 链接 / 文件路径 / 应用名")),
+            required = listOf("target"),
+        ),
+        AgentTool(
+            name = CLIPBOARD,
+            description = "读写系统剪贴板。\n" +
+                "⚠️ 读有个系统限制：Android 10 起只有**本 app 在前台**才读得到内容，" +
+                "后台读会拿到空 —— 报「剪贴板是空的」的时候不一定是真空。写不受这个限制。",
+            properties = JSONObject()
+                .put("action", act("要干什么", "read", "write"))
+                .put("text", str("write 时要写的内容"))
+                .put("label", str("内容标签（可选，系统显示用）")),
+            required = listOf("action"),
+        ),
+        AgentTool(
+            name = NOTICE,
+            description = "发一条系统通知到通知栏。长任务跑完了、或者用户在别的 app 里" +
+                "你得提醒他一下，用它 —— 别只在对话里写一句「好了」，那会儿用户不在界面上。\n" +
+                "important=true 会有声音/横幅，用之前想想真有必要吗。",
+            properties = JSONObject()
+                .put("title", str("通知标题"))
+                .put("text", str("通知内容"))
+                .put("important", boolean("要不要更重要的提示（默认 false）")),
+            required = listOf("title", "text"),
+        ),
+        AgentTool(
+            name = SHOT,
+            description = "截屏存成 PNG。\n" +
+                "⚠️ 需要 root 或 Shizuku —— 普通权限下系统的 screencap 会被挡，" +
+                "这条会直接告诉你「需要特权」，那种情况**别换写法重试**，" +
+                "正当路子是让用户开 Shizuku，或者干脆说做不到。",
+            properties = JSONObject().put("path", str("存到哪儿，默认沙箱里 screen.png，必须是 .png")),
+            required = emptyList(),
+        ),
     )
 
-    /** 这个环境允许用哪些工具（沙箱少一点） */
+    /**
+     * 这个环境允许用哪些工具。
+     *
+     * 沙箱只去掉 device_info（那上面写着"当前权限/沙箱根"，对沙箱模式没意义）。
+     * 截屏/剪贴板这些**不给沙箱裁掉** —— 它们内部自己会照权限现实说话
+     * （比如截屏没 root 就直说做不到），比让模型猜要省事。
+     */
     fun toolsFor(env: AgentEnv): List<AgentTool> = when (env) {
         AgentEnv.Sandbox -> ALL.filter { it.name != DEVICE }
         AgentEnv.Host -> ALL
@@ -191,17 +346,17 @@ object AgentTools {
     /* ================= 执行 ================= */
 
     /**
-     * 要不要先问用户。
+     * 要不要先问用户，不在这儿决定 —— 命中危险就**带回一个待批准决策**，
+     * 由 AgentChat 那唯一的确认通道去问。
      *
-     * [askUser] 由界面给：把命中的那一类递过去，回一个同意/不同意。
-     * 策略是"每次问"才会调它。
+     * （以前这儿直接调 `askUser`：弹窗逻辑散在 AgentTaskService、AgentChat 两处，
+     * root 那条还另走一套字符串协议 —— 同一个"问用户"三种写法，改一处忘一处。）
      */
     suspend fun run(
         ctx: Context,
         env: AgentEnv,
         name: String,
         args: JSONObject,
-        askUser: (suspend (DangerGuard.Hit) -> Boolean)? = null,
         /** 命令的实时输出行（下载进度靠它） */
         onLine: ((String) -> Unit)? = null,
         /** 哪个会话在跑 —— 后台下载要往这一份的进度上报，不能串台 */
@@ -220,14 +375,21 @@ object AgentTools {
                 )
                 DangerGuard.Policy.Allow -> Unit
                 DangerGuard.Policy.Ask -> {
-                    val ok = askUser?.invoke(hit) ?: true
-                    if (!ok) {
-                        return ToolResult(
-                            false,
-                            "用户拒绝了这次操作（" + hit.category.label + "：" + hit.category.note +
-                                "），换个办法或者先问清楚。",
-                        )
-                    }
+                    // 不在后台线程弹窗（弹不了，坑 #39），把要问的东西带上去
+                    return ToolResult(
+                        ok = false,
+                        output = "这个动作要先经用户同意（" + hit.category.label + "），" +
+                            "同意后会自动执行，不用你再发一遍。",
+                        decision = RiskDecision(
+                            // "改到 sdcard 之外"单独一类，标题说得清它在担心什么
+                            kind = if (hit.category.id == "outside_user_area")
+                                RiskKind.WriteOutside else RiskKind.Danger,
+                            detail = hit.matched,
+                            note = hit.category.label,
+                            consequence = hit.category.consequence,
+                            run = { runUnchecked(ctx, env, name, args, onLine, conversationId) },
+                        ),
+                    )
                 }
             }
         }
@@ -265,18 +427,24 @@ object AgentTools {
             AgentRunner.readMany(ctx, env, list)
         }
 
-        FIND -> AgentRunner.findFiles(
+        // 这两条从"拼 shell 命令"换成 AgentFsOps 的纯 Kotlin 实现：
+        // 沙箱里没装 Termux 也能用，而且**过路径围栏**（shell 那条不过）
+        FIND -> AgentFsOps.find(
             ctx, env,
             args.optString("root", ".").trim(),
             args.optString("name", "*").trim(),
             args.optInt("max_depth", 5),
+            args.optInt("limit", 100),
         )
 
-        GREP -> AgentRunner.grepText(
+        GREP -> AgentFsOps.grep(
             ctx, env,
             args.optString("root", ".").trim(),
             args.optString("pattern", "").trim(),
             args.optString("file_glob", "*").trim(),
+            args.optInt("context", 0),
+            args.optBoolean("ignore_case", false),
+            args.optInt("limit", 60),
         )
 
         READ -> AgentRunner.readFile(
@@ -299,7 +467,110 @@ object AgentTools {
 
         DOWNLOAD_CHECK -> checkDownload(args)
 
+        // ---- 1.02.0：文件与设备动作，全部走围栏 ----
+        FILE_OP -> fileOp(ctx, env, args)
+
+        DELETE -> AgentFsOps.delete(
+            ctx, env,
+            args.optString("path", "").trim(),
+            args.optBoolean("recursive", false),
+        )
+
+        TREE -> AgentFsOps.tree(
+            ctx, env,
+            args.optString("path", ".").trim(),
+            args.optInt("depth", 3),
+            args.optInt("max_nodes", 200),
+        )
+
+        STAT -> AgentFsOps.stat(ctx, env, args.optString("path", "").trim())
+
+        ARCHIVE -> archive(ctx, env, args)
+
+        APPS -> AgentDeviceOps.listApps(ctx, args.optString("keyword", "").trim())
+
+        OPEN -> AgentDeviceOps.open(ctx, args.optString("target", "").trim())
+
+        CLIPBOARD -> when (args.optString("action", "read").trim().lowercase()) {
+            "write" -> AgentDeviceOps.clipboardWrite(
+                ctx,
+                args.optString("text", ""),
+                args.optString("label", "").trim(),
+            )
+            "read" -> AgentDeviceOps.clipboardRead(ctx)
+            else -> ToolResult(false, "action 只认 read / write，给的是：" + args.optString("action", ""))
+        }
+
+        NOTICE -> AgentDeviceOps.notify(
+            ctx,
+            args.optString("title", "").trim(),
+            args.optString("text", "").trim(),
+            args.optBoolean("important", false),
+            // 点通知回到 Agent 页
+            openAgent = true,
+        )
+
+        SHOT -> AgentDeviceOps.screenshot(ctx, env, args.optString("path", "screen.png").trim())
+
         else -> ToolResult(false, "没有这个工具：" + name)
+    }
+
+    /* ================= 文件 / 压缩包分发 ================= */
+
+    /**
+     * file_op 的分发。
+     *
+     * 三个动作共用一条工具（省 prompt），但**删除不在这儿** ——
+     * 删除要单独走确认，混进来会让人以为 copy/move 也要弹窗。
+     */
+    private suspend fun fileOp(ctx: Context, env: AgentEnv, args: JSONObject): ToolResult {
+        val action = args.optString("action", "").trim().lowercase()
+        val src = args.optString("src", "").trim()
+        val dst = args.optString("dst", "").trim()
+        if (action == "mkdir") return AgentFsOps.mkdir(ctx, env, src)
+        if (src.isBlank()) return ToolResult(false, "src 是空的。")
+        return when (action) {
+            "copy" -> {
+                if (dst.isBlank()) ToolResult(false, "copy 要 dst（目标路径）。")
+                else AgentFsOps.copyOrMove(ctx, env, src, dst, copy = true)
+            }
+            "move" -> {
+                if (dst.isBlank()) ToolResult(false, "move 要 dst（目标路径）。改名也一样，dst 填新名字的全路径。")
+                else AgentFsOps.copyOrMove(ctx, env, src, dst, copy = false)
+            }
+            "delete" -> ToolResult(
+                false,
+                "删除请用 delete_path 工具（它会先让用户确认）。file_op 不做删除。",
+            )
+            else -> ToolResult(false, "action 只认 copy / move / mkdir，给的是：「$action」")
+        }
+    }
+
+    /** archive 的分发：三个动作都要的字段不一样，分开校验 */
+    private suspend fun archive(ctx: Context, env: AgentEnv, args: JSONObject): ToolResult {
+        val action = args.optString("action", "").trim().lowercase()
+        val path = args.optString("path", "").trim()
+        if (path.isBlank()) return ToolResult(false, "path 是空的。")
+        return when (action) {
+            "list" -> AgentFsOps.archiveList(ctx, env, path)
+            "unpack" -> AgentFsOps.extract(
+                ctx, env, path,
+                args.optString("out_dir", "").trim().ifBlank {
+                    // 默认解到压缩包旁边一个同名目录：app.zip → app/
+                    val n = path.substringAfterLast('/')
+                    path.substringBeforeLast('/') + "/" + n.substringBeforeLast('.')
+                },
+            )
+            "pack" -> {
+                val a = args.optJSONArray("inputs")
+                val list = ArrayList<String>()
+                if (a != null) for (i in 0 until a.length()) {
+                    a.optString(i).takeIf { it.isNotBlank() }?.let { list += it }
+                }
+                AgentFsOps.zip(ctx, env, path, list)
+            }
+            else -> ToolResult(false, "action 只认 list / unpack / pack，给的是：「$action」")
+        }
     }
 
     /* ================= 后台下载 ================= */

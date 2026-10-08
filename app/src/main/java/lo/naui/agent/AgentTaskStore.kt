@@ -47,6 +47,14 @@ object AgentTaskStore {
         val progress: String = "",
         val startedAt: Long = 0L,
         val finishedAt: Long = 0L,
+        /**
+         * 这个会话里已经失败过的做法（工具 + 错误签名，去重）。
+         *
+         * 为什么挂在 State 上而不是全局：切会话不该把别的会话的教训带过来。
+         * 类型是**可变的记录本**（不是 List/String 那种值），所以 data class 的
+         * copy() 出来的新状态共享同一个实例 —— 记一次，后面每一轮都还在。
+         */
+        val lessons: AgentMemory.LessonLog = AgentMemory.LessonLog(),
     ) {
         companion object {
             val IDLE = State()

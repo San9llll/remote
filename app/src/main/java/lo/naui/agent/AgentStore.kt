@@ -45,6 +45,21 @@ object AgentStore {
      * 以前写死 8，一撞到就卡在"工具已经使用 8 次"。现在可配，**0 = 不限**。
      */
     var maxToolRounds by mutableStateOf(16)
+
+    /**
+     * 模型上下文长度（token，粗略估：1 token ≈ 1.5 字符）。
+     *
+     * 这是"该不该压上下文"的分母 —— 没有它，shouldCompress 就只能是个死函数
+     * （1.02.0 之前就是这样：COMPRESS_THRESHOLD=0.82 写得挺像样，**没人调用过**）。
+     * 默认按 64k 给，DeepSeek / 通义那几家常用档都够得着。
+     * 设太小会过早压缩（丢细节），设太大有服务商直接报 400 —— 所以做成可选项。
+     */
+    var contextLimit by mutableStateOf(64_000)
+
+    fun updateContextLimit(v: Int) {
+        contextLimit = if (v <= 0) 64_000 else v
+        sp?.edit()?.putInt("context_limit", contextLimit)?.apply()
+    }
         private set
 
     fun updateMaxToolRounds(v: Int) {
@@ -66,6 +81,7 @@ object AgentStore {
         temperature = p.getFloat("temperature", 0.7f)
         maxTokens = p.getInt("max_tokens", 0)
         maxToolRounds = p.getInt("max_tool_rounds", 16)
+        contextLimit = p.getInt("context_limit", 64_000)
         env = p.getString("env", AgentEnv.Sandbox.id)?.let { AgentEnv.of(it) } ?: AgentEnv.Sandbox
         workspace = p.getString("workspace", "") ?: ""
         dangerPolicy = p.getString("danger", "ask")

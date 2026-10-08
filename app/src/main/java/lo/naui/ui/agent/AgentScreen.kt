@@ -1614,6 +1614,47 @@ private fun ModelSheet(onDismiss: () -> Unit) {
         )
 
         Spacer(Modifier.height(14.dp))
+        // 上下文长度：该压上下文的分母。
+        //
+        // 为什么要暴露出来：各家模型的窗口差好几倍（16k / 32k / 64k / 128k），
+        // 写死一个数 —— 设小了没到 82% 永远不压（超长直接 400），
+        // 设大了过早就开始压（把还没用的细节挤成摘要，模型回头说"你没提过"）。
+        Text("上下文长度", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+        Spacer(Modifier.height(4.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf(16_000, 32_000, 64_000, 128_000).forEach { v ->
+                val on = AgentStore.contextLimit == v
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(
+                            if (on) MiuixTheme.colorScheme.primary
+                            else MiuixTheme.colorScheme.surfaceContainerHigh
+                        )
+                        .clickable { AgentStore.updateContextLimit(v) }
+                        .padding(vertical = 8.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        (v / 1000).toString() + "k",
+                        fontSize = 12.sp,
+                        fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (on) MiuixTheme.colorScheme.onPrimary
+                        else MiuixTheme.colorScheme.onSurface,
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(3.dp))
+        Text(
+            "用到八成会开始压：最老的几轮并成一段摘要，" +
+                "细节会被挤掉 —— 按你订阅的模型实际窗口选",
+            fontSize = 10.sp,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+        )
+
+        Spacer(Modifier.height(14.dp))
         // 环境
         Text("模型能用的环境", fontSize = 13.sp, fontWeight = FontWeight.Medium)
         Spacer(Modifier.height(4.dp))

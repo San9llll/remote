@@ -29,6 +29,9 @@ F = {
     "api": SRC + "/agent/AgentApi.kt",
     "store": SRC + "/agent/AgentStore.kt",
     "chat": SRC + "/agent/AgentChat.kt",
+    "mem": SRC + "/agent/AgentMemory.kt",
+    "fsops": SRC + "/agent/AgentFsOps.kt",
+    "risk": SRC + "/agent/AgentRisk.kt",
     "rail": SRC + "/ui/home/HomeSceneRail.kt",
     "home": SRC + "/ui/home/HomeScreen.kt",
 }
@@ -274,6 +277,22 @@ def main():
     need('sp.getInt("pref_version"' in read("prefs"), "ThemePrefs 里要有 pref_version 一次性迁移")
     for k in ("card_style", "glass_blur", "glass_lens"):
         need('remove("%s")' % k in read("prefs"), "迁移要清掉 %s" % k)
+
+    # ---------- ⑧'' 上下文能力（批次 F）：那段死代码要真的活了 ----------
+    mem = read("mem")
+    chat2 = read("chat")
+    need("fun recall(" in mem and "AgentMemory.recall(" in chat2,
+         "召回没接进主流程（recall 写了没人调 = 又是一段死代码）")
+    need("AgentMemory.compact(" in chat2, "压缩没接进主流程")
+    need("AgentMemory.taskBoard(" in chat2, "任务态没接进主流程")
+    need("lessons.note(" in chat2 and "lessons.render()" in chat2, "失败沉淀没接上")
+    need("AgentContext.shouldCompress(" in strip_code(mem),
+         "compact 应该走 AgentContext.shouldCompress —— 它曾经写了个 0.82 摆着全项目没人调用")
+    # 任务态不许拼进 system：会打断服务商的前缀缓存，等于每轮重新 prefill 全部历史
+    forbid("sysNow" in chat2,
+           "任务态别拼进 system：system 在最前面，它一变整段历史都不再命中前缀缓存")
+    need("system = system," in chat2, "system 每轮保持不变（任务态挂消息尾部）")
+    need("contextLimit" in read("store"), "AgentStore 里要有 contextLimit（压缩的分母）")
 
     # ---------- ⑧ 跨文件顶层函数：用了就必须 import ----------
     #

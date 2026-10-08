@@ -107,13 +107,38 @@ object AgentChat {
                     raw += JSONObject().put("role", m.role).put("content", m.text)
                 }
             }
-            // 裁 + 修序列
-            val fixed = AgentContext.truncateByHalving(raw)
+            // ---- ① 召回 ----
+            //
+            // 以前是死板的"最后 30 条"：用户到第 40 轮提起第 5 轮说过的东西，
+            // 模型是**真的没看见**，只能回"你没提过"。
+            // 现在最近 14 条一定带，更早的按关键词从剩下的里捞几条回来。
+            val latestQuestion = history.lastOrNull { it.role == "user" }?.text.orEmpty()
+            val picked = AgentMemory.recall(raw, latestQuestion)
+
+            // ---- ② 裁剪 ----
+            var fixed = AgentContext.truncateByHalving(picked)
+
+            // ---- ③ 压缩（shouldCompress 终于有人调了）----
+            //
+            // ⚠️ 1.02.0 之前 AgentContext.shouldCompress / COMPRESS_THRESHOLD
+            // 是**死代码** —— 没有任何调用方，阈值怎么改都不影响行为。
+            // 现在接上了：超过 AgentStore.contextLimit 的 82%，
+            // 就把最老的若干轮并成一小段结构化摘要，挂在最前面。
+            // 丢的是字节，不是"这事儿发生过"。
+            val compacted = AgentMemory.compact(fixed, AgentStore.contextLimit)
+            val compressed = compacted.second.isNotEmpty()
+            // 摘掉一批之后 tool_calls / tool 的配对可能断了，必须再修一遍
+            // （OpenAI 规范硬要求，Gemini 尤其严格 —— 坑在 AgentContext 注释里写着）
+            fixed = AgentContext.fixMessages(compacted.first)
+
             val messages = JSONArray()
             fixed.forEach { messages.put(it) }
 
             val log = mutableListOf<String>()
             val steps = mutableListOf<ToolStep>()
+
+            /** 这个会话踩过的坑（可变记录本，copy 状态时共享同一个实例） */
+            val lessons = AgentTaskStore.stateOf(conversationId).lessons
 
             /**
              * 同一个工具连着失败的次数。
@@ -153,9 +178,39 @@ object AgentChat {
                 var reply: AgentApi.Reply? = null
                 var attempt = 0
                 while (attempt < 3) {
+                    // ---- 本轮的任务态：挂在**消息尾部**，不拼进 system ----
+                    //
+                    // 为什么要每轮重算：模型"反复做同一件事"多数不是笨，
+                    // 是它**看不见自己已经做过什么**。这块就是给它看的镜子。
+                    //
+                    // ⚠️ 为什么不能拼进 system（我上一版就是这么写的）：
+                    // system 在整个请求的**最前面**，它一变，后面整段历史
+                    // 就都不再命中服务商的前缀缓存 —— 等于每轮重新 prefill 一遍全部上下文。
+                    // 上一轮我刚拿"前缀缓存能吃掉提示词的膨胀"当理由把 TOOL_NOTE 放宽，
+                    // 转头就往 system 里塞每轮变化的东西，那是自己打自己的脸。
+                    // 挂到尾部就没这问题：前缀（system + 已有历史）一个字没变。
+                    val board = AgentMemory.taskBoard(
+                        steps = steps,
+                        round = round,
+                        compressed = compressed,
+                        waitingConfirm = AgentTaskStore.pendingConfirm != null,
+                    ) + lessons.render()
+
+                    // 只用于这一次发送，不塞回 messages：
+                    // 下一轮会重算一份新的，历史里也不会留下一堆"系统状态"垃圾
+                    val payload = JSONArray()
+                    for (i in 0 until messages.length()) payload.put(messages.get(i))
+                    if (board.isNotBlank()) {
+                        payload.put(
+                            JSONObject()
+                                .put("role", "user")
+                                .put("content", "【这是系统自动生成的状态板，不是用户说的话】" + board)
+                        )
+                    }
+
                     val r = AgentApi.stream(
                         system = system,
-                        messages = messages,
+                        messages = payload,
                         tools = tools,
                         temperature = temperature,
                         maxTokens = maxTokens,
@@ -269,6 +324,8 @@ object AgentChat {
                         consecutiveFail = 0
                         lastFailedTool = ""
                     } else {
+                        // 记进会话级的"踩过的坑"，下一轮的 system 里会带上
+                        lessons.note(call.name, result.output)
                         if (call.name == lastFailedTool) {
                             consecutiveFail++
                         } else {

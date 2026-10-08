@@ -105,6 +105,10 @@ dependencies {
     implementation(libs.miuix.icons)
     implementation(libs.miuix.preference)
     implementation(libs.backdrop)
+    // 7z 支持（用户批准加的）：commons-compress 读 7z 容器，
+    // tukaani-xz 提供里面的 LZMA/LZMA2 解码 —— 少一个就只能解 zip。
+    implementation(libs.commons.compress)
+    implementation(libs.tukaani.xz)
     // Shizuku：给没 root、但有 adb 的人用（识别 + 之后拿系统能力）
     implementation(libs.shizuku.api)
     implementation(libs.shizuku.provider)

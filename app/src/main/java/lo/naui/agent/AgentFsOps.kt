@@ -784,13 +784,10 @@ object AgentFsOps {
             sb.append("APK 应用名：").append(label.ifBlank { "（归档包不解密，装完才读得出）" }).append('\n')
             sb.append("APK minSdk：").append(ai.minSdkVersion)
                 .append(" targetSdk：").append(ai.targetSdkVersion).append('\n')
-            val perms = ai.requestedPermissions?.toList().orEmpty()
-            sb.append("APK 权限 ").append(perms.size).append(" 项")
-            if (perms.isNotEmpty()) {
-                sb.append("：").append(perms.take(12).joinToString(", ") { it.substringAfterLast('.') })
-                if (perms.size > 12) sb.append(" …")
-            }
-            sb.append('\n')
+            // ⚠️ compileSdk 37 下 ApplicationInfo.requestedPermissions 已经取不到了
+            //（CI 报 Unresolved reference）。要么走 PackageInfo + GET_PERMISSIONS 另解，
+            // 要么就别报这一项 —— 宁可少说一项，也不要读一个不存在的字段。
+            sb.append("APK 权限：这个 SDK 版本读不到（要看得装完之后用 pm list permissions）\n")
         }
         sb.toString()
     }.getOrElse { "APK：读失败 ${it.message}\n" }

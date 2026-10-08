@@ -9,7 +9,8 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.layout.findRootCoordinates
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import lo.naui.ui.theme.BgStyle
 import androidx.compose.animation.AnimatedVisibility
@@ -424,11 +425,6 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
                         Text("样式", fontSize = 13.sp, fontWeight = FontWeight.Medium)
                         Spacer(Modifier.height(8.dp))
 
-                        val density = androidx.compose.ui.platform.LocalDensity.current
-                        val cfg = androidx.compose.ui.platform.LocalConfiguration.current
-                        val screenW = with(density) { cfg.screenWidthDp.dp.toPx() }.coerceAtLeast(1f)
-                        val screenH = with(density) { cfg.screenHeightDp.dp.toPx() }.coerceAtLeast(1f)
-
                         // 高亮块滑过去的进度
                         val idx = BgStyle.entries.indexOf(prefs.bgStyle).coerceAtLeast(0)
                         val slide by animateFloatAsState(
@@ -475,9 +471,20 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
                                             .width(segW)
                                             .height(38.dp)
                                             .onGloballyPositioned { coords ->
-                                                val pos = coords.positionInWindow()
-                                                cx = (pos.x + coords.size.width / 2f) / screenW
-                                                cy = (pos.y + coords.size.height / 2f) / screenH
+                                                // ⚠️ 归一化必须用**同一套坐标系**。
+                                                // 原来拿 positionInWindow()（窗口坐标，px）
+                                                // 去除 cfg.screenWidthDp/screenHeightDp
+                                                //（**屏幕**尺寸，还不含状态栏和导航栏）——
+                                                // 分子分母不是一个东西，Y 就系统性偏一截，
+                                                // 涟漪看着不是从按钮中心长出来的（坑 #38 的续集）。
+                                                // 现在位置用 positionInRoot、尺寸用根布局的，
+                                                // 两边都是"相对根布局的 px"，除出来才对。
+                                                val root = coords.findRootCoordinates().size
+                                                val w = root.width.toFloat().coerceAtLeast(1f)
+                                                val h = root.height.toFloat().coerceAtLeast(1f)
+                                                val pos = coords.positionInRoot()
+                                                cx = (pos.x + coords.size.width / 2f) / w
+                                                cy = (pos.y + coords.size.height / 2f) / h
                                             }
                                             .clip(RoundedCornerShape(50))
                                             .clickable {
@@ -546,6 +553,23 @@ fun ThemeScreen(prefs: ThemePrefs, onBack: () -> Unit = {}) {
                             color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                         )
                     }
+
+                    // ---- 背景模糊（1.00.0 新增）----
+                    //
+                    // 原来这个值是写死在代码里的（壁纸 32dp、内容页底图 26dp），
+                    // 现在做成滑块。三处共用一个数：壁纸、内容页底图、切背景那圈涟漪。
+                    // 涟漪必须跟壁纸同半径 —— 不然过渡那一下圆里圆外两种糊法，割裂。
+                    //
+                    // 卡片折射的也是这一层，所以调它 = 连玻璃里的背景一起变。
+                    SliderPreference(
+                        value = prefs.bgBlur,
+                        onValueChange = { prefs.updateBgBlur(it) },
+                        title = "背景模糊",
+                        summary = "整张背景糊多少（卡片折射的就是这一层，玻璃会跟着变）",
+                        valueText = prefs.bgBlur.toInt().toString() + " dp",
+                        valueRange = 0f..48f,
+                        steps = 11,
+                    )
 
                     // ---- 自定义才展开下面这些 ----
                     androidx.compose.animation.AnimatedVisibility(

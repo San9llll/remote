@@ -105,12 +105,19 @@ enum class Density(val id: String, val label: String, val summary: String, val d
     }
 }
 
-/** 卡片方案：默认还是原来那套仿玻璃（纯 2D，最稳），液态玻璃是可选项 */
+/**
+ * 卡片方案。
+ *
+ * **1.00.0 起默认液态玻璃**（用户要的：卡片要真玻璃、实时折射背景）。
+ * 走的是社区库 com.kyant.backdrop —— 之前崩过的那次是自己手写折射，
+ * 换成这个库之后没再崩过，所以默认值敢改。
+ * 仿玻璃留着当退路：万一哪台机器上折射出问题，主题页一键切回去。
+ */
 enum class CardStyle(val id: String, val label: String, val summary: String) {
-    Legacy("legacy", "仿玻璃", "纯 2D 叠层，零 GPU 折射 —— 默认，最不容易出岔子"),
-    Liquid("liquid", "液态玻璃", "走社区库做真折射，观感更好，但吃 GPU");
+    Legacy("legacy", "仿玻璃", "纯 2D 叠层，零 GPU 折射 —— 最省，出问题时的退路"),
+    Liquid("liquid", "液态玻璃", "走社区库做真折射，实时采样背景 —— 默认");
 
-    companion object { fun of(id: String?) = entries.firstOrNull { it.id == id } ?: Legacy }
+    companion object { fun of(id: String?) = entries.firstOrNull { it.id == id } ?: Liquid }
 }
 
 /** 侧栏信息块里一行能显示什么 */
@@ -303,6 +310,25 @@ class ThemePrefs(context: Context) {
         sp.edit().putString("builtin_hero", "").apply()
     }
 
+    /**
+     * **背景模糊**，dp（0~48）。
+     *
+     * 1.00.0 新增：原来这个值是写死在代码里的（壁纸 32dp、内容页底图 26dp），
+     * 用户要求做成能自由调的滑块。默认 32 = 跟原来一个观感。
+     *
+     * 三处吃它：
+     *   · 壁纸那层                    → bgBlur
+     *   · 内容页 / 设置页那张底图     → bgBlur * 0.8（原来 26/32 ≈ 0.8）
+     *   · 切背景的涟漪层              → bgBlur（必须跟壁纸一致，
+     *                                       不然过渡那一下圆里圆外两种糊法，割裂）
+     */
+    var bgBlur by mutableStateOf(sp.getFloat("bg_blur", 32f))
+
+    fun updateBgBlur(v: Float) {
+        bgBlur = v.coerceIn(0f, 48f)
+        sp.edit().putFloat("bg_blur", bgBlur).apply()
+    }
+
     /** 内置背景下这次随机到的那张 */
     var builtinHero by mutableStateOf(sp.getString("builtin_hero", "") ?: "")
         private set
@@ -481,8 +507,14 @@ class ThemePrefs(context: Context) {
 
     /* ---------- 玻璃参数（液态玻璃那几个旋钮）---------- */
 
-    /** 模糊半径，dp */
-    var glassBlur by mutableStateOf(sp.getFloat("glass_blur", 0f))
+    /**
+     * 卡片自己的模糊半径，dp。
+     *
+     * 默认从 0 提到 18：液态玻璃成了默认之后，卡片采的是背景那层，
+     * 模糊给 0 就等于把背景原样贴进卡片里，看着像"贴片"不像玻璃。
+     * 想更透就往小调，滑块范围 0~40 没变。
+     */
+    var glassBlur by mutableStateOf(sp.getFloat("glass_blur", 18f))
 
     fun updateGlassBlur(v: Float) {
         glassBlur = v.coerceIn(0f, 40f)

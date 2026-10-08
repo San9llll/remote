@@ -123,6 +123,10 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
     // 导轨宽度跟着窗口走，和参考项目一个算法（外层算一次，首页和导轨共用同一个数）
     val sceneRailWidth = (widthDp.dp * 0.25f - 28.dp).coerceIn(56.dp, 80.dp)
 
+    // 背景模糊半径（主题页新加的滑块）。壁纸、内容页底图、涟漪三处共用一个数，
+    // 这样切背景的时候圆里圆外才是同一种糊法。
+    val bgBlurDp = prefs.bgBlur.dp
+
     val useBottomNav = when (prefs.navMode) {
         NavMode.Auto -> widthDp < COMPACT_WIDTH_DP
         NavMode.Bottom -> true
@@ -156,8 +160,10 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
      */
     var shownWallpaper by remember { mutableStateOf<ImageBitmap?>(null) }
 
-    /** 刚加载好、等着被"推"出来的新图 */
-    var pendingWallpaper by remember { mutableStateOf<ImageBitmap?>(null) }
+    // ⚠️ 原来这儿有个 pendingWallpaper（"刚加载好、等着被推出来的新图"）。
+    // 1.00.0 删掉了：新图现在由**涟漪队列自己带着**（BgRipples.Ripple.to），
+    // 一条涟漪一张图，连点几次就排几条，谁也不会顶掉谁 ——
+    // 放在外壳里当单个变量的话，后一次必然把前一次覆盖掉。
 
     // 启动时把当前样式的图先解好放缓存 —— 之后切换就是直接拿，没有解码那一下
     LaunchedEffect(prefs.bgStyle) {
@@ -182,15 +188,15 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
             val (seed, isLight) = lo.naui.ui.theme.dominantSeed(bmp)
             prefs.saveWallpaperSeed(seed, isLight)
 
-            if (shownWallpaper == null) {
+            if (shownWallpaper == null && !lo.naui.ui.theme.BgRipples.running) {
                 // 头一次加载：没有旧图可过渡，直接上
                 shownWallpaper = img
                 wallpaper = img
                 lo.naui.ui.theme.BgRipples.clear()
             } else {
-                // 换图：新图先挂到 pending，等涟漪把它推出来
-                pendingWallpaper = img
-                lo.naui.ui.theme.BgRipples.fire()
+                // 换图：排进涟漪队列，由涟漪把它推出来。
+                // 底层这张**先不动** —— 动了就等于跳过动画直接换图。
+                lo.naui.ui.theme.BgRipples.fire(img)
             }
         } else {
             shownWallpaper = null
@@ -198,14 +204,16 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
         }
     }
 
-    // 涟漪跑完了 → 把 pending 扶正，底层这才换图
-    val nowRipples = lo.naui.ui.theme.BgRipples.active()
-    LaunchedEffect(nowRipples.isEmpty(), pendingWallpaper) {
-        if (nowRipples.isEmpty() && pendingWallpaper != null) {
-            shownWallpaper = pendingWallpaper
-            wallpaper = pendingWallpaper
-            pendingWallpaper = null
-        }
+    // 涟漪队列跑空了 → 把最新那张扶正，底层这才换图。
+    //
+    // ⚠️ 读 `running` 就是读 `list`，所以队列一变（入队 / 被 prune 摘空）这里都会
+    // 重组 —— 这正是原来缺的那一环：没人通知外壳"涟漪结束了"。
+    val ripplesRunning = lo.naui.ui.theme.BgRipples.running
+    LaunchedEffect(ripplesRunning) {
+        if (ripplesRunning) return@LaunchedEffect
+        val next = lo.naui.ui.theme.BgRipples.settledTo ?: return@LaunchedEffect
+        shownWallpaper = next
+        wallpaper = next
     }
 
     LaunchedEffect(prefs.contentImage, prefs.bgStyle) {
@@ -336,71 +344,70 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
         contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom),
     ) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
-            // ① 素材层：清晰、不压黑 —— 玻璃卡 drawBackdrop 采样的就是这一层。
-            //    它会被 ② 完全盖住，肉眼看不见；但少了它玻璃卡就没东西可折射。
-            Box(Modifier.fillMaxSize().layerBackdrop(backdrop)) {
-                AppBackdropLayer(
-                    panorama = panorama,
-                    wallpaper = shownWallpaper,
-                    railWidth = if (showSceneRail) sceneRailWidth else 0.dp,
-                    pageBitmap = pageBitmap,
-                    showPageBg = showPageBg,
-                    settingsBitmap = settingsBitmap,
-                    showSettingsBg = isSettingsPage,
-                    blurred = false,
-                    darkScrim = isDarkTheme,
-                )
+            // ① 背景 —— 1.00.0 起**只画一遍**，拆成"图层"和"纱层"两块：
+            //
+            //   图层（挂在 layerBackdrop 里）：兜底渐变 → 壁纸（模糊可调）→ 涟漪 → 内容页底图
+            //   纱层（在 layerBackdrop 外）：  压黑纱 → 导轨渐变 → 底图那层面板色
+            //
+            // 为什么拆：卡片折射的必须是**没压黑**的图，不然折出来一团黑
+            //（老注释里踩过这个坑，当时的解法是再画一遍清晰素材层 —— 全屏壁纸每帧两遍）。
+            // 现在把纱挪出去就不用画两遍了，观感跟 iOS 26 / Aster 那套一致：
+            // 背景先糊，卡片再在上面折射，模糊强度还跟着主题页那个滑块走。
+            val railW = if (showSceneRail) sceneRailWidth else 0.dp
 
-                // 涟漪在**素材层里也画一份**。
-                //
-                // 为什么：卡片里的玻璃（drawBackdrop）采样的就是这一层 ——
-                // 涟漪要在这儿，卡片才会跟着背景一起变
-                //（用户说的"卡片和模糊没有实时渲染"）。
-                // 下面视觉层还会再画一份，那份是给眼睛看的。
-                RippleLayer(shownWallpaper, pendingWallpaper, backdrop)
+            // 内容页 / 设置页铺的那张底图（设置页优先）。
+            // ⚠️ 只在这儿算一次 —— 图层和纱层两边都要用同一个判断，
+            // 各算各的迟早对不上（纱压错地方就是"背景突然变暗一块"）。
+            val pageBg: ImageBitmap? = when {
+                isSettingsPage && settingsBitmap != null -> settingsBitmap
+                showPageBg && pageBitmap != null -> pageBitmap
+                else -> null
             }
 
-            // ② 视觉层：糊 + 压黑，这才是你眼睛看到的那张背景
-            AppBackdropLayer(
+            // ── 采样层：卡片 drawBackdrop 折射的就是这一层 ──
+            //
+            // 里面**只有图，没有纱**。压黑纱挪到外面去了，理由写在
+            // HomeSceneDecor 的注释里：纱被折进卡片就是一片黑。
+            Box(Modifier.fillMaxSize().layerBackdrop(backdrop)) {
+                AppBackdropImages(
+                    panorama = panorama,
+                    wallpaper = shownWallpaper,
+                    railWidth = railW,
+                    pageBg = pageBg,
+                    bgBlur = bgBlurDp,
+                )
+
+                // 涟漪画在采样层**内部**、用同一个模糊半径 ——
+                // 圆里圆外一种糊法，过渡才不割裂，卡片也跟着一起变。
+                //（用户报的"图片未进行模糊和玻璃渲染就直接投影"，就是因为它
+                //  原来画在模糊层之上、画的还是清晰原图。）
+                RippleLayer(shown = shownWallpaper, bgBlur = bgBlurDp)
+            }
+
+            // ── 纱层：压黑 + 导轨渐变 + 内容页底图那层面板色 ──
+            AppBackdropScrim(
                 panorama = panorama,
-                wallpaper = shownWallpaper,
-                railWidth = if (showSceneRail) sceneRailWidth else 0.dp,
-                pageBitmap = pageBitmap,
-                showPageBg = showPageBg,
-                settingsBitmap = settingsBitmap,
-                showSettingsBg = isSettingsPage,
-                blurred = true,
+                railWidth = railW,
                 darkScrim = isDarkTheme,
+                hasPageBg = pageBg != null,
             )
 
-            // 涟漪也画在视觉层上 ——
-            // 不然被上面那层的模糊+压黑盖住，眼睛看不到。
-            // 跟素材层那份是**同一份数据**（BgRipples），所以两边是同步的。
-            RippleLayer(shownWallpaper, pendingWallpaper, backdrop)
-
-            // ② 内容层：卡片在这里面，用 drawBackdrop 去采样上面那层
+            // ② 内容层：卡片在这里面，用 drawBackdrop 采样上面那层背景。
             //
-            // ---- 涟漪期间把 backdrop 掐掉 ----
+            // ⚠️ 这里原来包着一段"涟漪期间把 backdrop 置成 null"的 hack，**已删**。
             //
-            // 为什么要这么干：
+            // 它的理由是「layerBackdrop 里写着 shouldAutoInvalidate = false，
+            // 不会每帧重录」。但那是旧版本的源码 —— 本项目用的 backdrop 是 **2.0.1**，
+            // 我把 LayerBackdropModifier.kt 拉下来核对过：那个字段**根本不存在**，
+            // 节点走默认值，draw() 里就是 drawContent() + recordLayer(...)，
+            // 子树一重绘它就重录。所以这个 hack 不但没必要，还带来一个真 bug：
             //
-            // `layerBackdrop` 那个 modifier 里写着 `shouldAutoInvalidate = false`
-            // —— 它**不会每帧重录**，只有内容变化时才录。
-            // 而涟漪是逐帧在动的，所以卡片采到的永远是"涟漪刚开始那一帧"，
-            // 看着就是**卡片不跟着背景变**。
+            //   ripplesActive 是**组合期算的一次性值**，涟漪跑完之后没有任何状态变化
+            //   触发重组 → 它永远停在 true → LocalGlassBackdrop 永远是 null
+            //   → 卡片玻璃退化成半透明叠色，直到用户切个页面才恢复。
             //
-            // 我本来想直接调 `graphicsLayer.invalidate()` 逼它重录，
-            // 但 **Compose 的 GraphicsLayer 根本没这个方法**（编译期报 Unresolved）。
-            //
-            // 所以反过来：**过渡期间干脆别采样**。
-            // 把 backdrop 置成 null，卡片就退化成"半透明叠色" ——
-            // 它下面就是涟漪层，**自然透出来，就是实时的**。
-            // 过渡一结束，backdrop 恢复，卡片又变回液态玻璃。
-            val ripplesActive = lo.naui.ui.theme.BgRipples.active().isNotEmpty()
-            androidx.compose.runtime.CompositionLocalProvider(
-                lo.naui.ui.component.LocalGlassBackdrop provides
-                    (if (ripplesActive) null else backdrop)
-            ) {
+            // 现在 backdrop 由 MainActivity 那层一直提供着，涟漪期间卡片照常折射；
+            // 而且涟漪就画在被采样的那一层里，所以卡片是**跟着背景一起变**的。
             Column(Modifier.fillMaxSize()) {
                 Row(Modifier.weight(1f).fillMaxWidth()) {
                     if (standardRail) {
@@ -566,7 +573,6 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
                         .zIndex(1f),
                 )
             }
-            }   // ← CompositionLocalProvider
         }
     }
 }
@@ -580,66 +586,79 @@ private fun loadBitmap(path: String): android.graphics.Bitmap? {
 }
 
 /**
- * 背景的一层。同一个画面画两遍：
- *  ① blurred = false → 素材层，给玻璃卡当折射素材
- *  ② blurred = true  → 视觉层，糊 + 压黑
+ * 背景里**纯图**的那部分（挂在 layerBackdrop 里，卡片会折射它）。
+ *
+ * 1.00.0 之前这里叫 AppBackdropLayer，同一个画面画两遍（清晰素材层 + 糊的视觉层）。
+ * 现在只画一遍，而且**不含任何压黑纱** —— 纱在 [AppBackdropScrim] 里，
+ * 画在采样层外面，免得卡片折射出来一团黑。
  */
 @Composable
-private fun AppBackdropLayer(
+private fun AppBackdropImages(
     panorama: Boolean,
     wallpaper: ImageBitmap?,
     railWidth: androidx.compose.ui.unit.Dp,
-    pageBitmap: ImageBitmap?,
-    showPageBg: Boolean,
-    settingsBitmap: ImageBitmap?,
-    showSettingsBg: Boolean,
-    blurred: Boolean,
-    darkScrim: Boolean,
+    /** 内容页 / 设置页那张底图，null = 这页不铺 */
+    pageBg: ImageBitmap?,
+    bgBlur: androidx.compose.ui.unit.Dp,
 ) {
     Box(Modifier.fillMaxSize()) {
         if (panorama) {
-            HomeSceneBackdrop(
-                wallpaper = wallpaper,
-                railWidth = railWidth,
-                blurred = blurred,
-                drawDecor = blurred,
-            )
+            HomeSceneBackdrop(wallpaper = wallpaper, bgBlur = bgBlur)
         } else {
             Box(Modifier.fillMaxSize().background(MiuixTheme.colorScheme.surface))
         }
 
-        // 设置页底图优先 —— 设置系那些页盖过内容页背景
-        val useSettings = showSettingsBg && settingsBitmap != null
-        val usePage = !useSettings && showPageBg && pageBitmap != null
-        val bg = if (useSettings) settingsBitmap else pageBitmap
-
-        if ((useSettings || usePage) && bg != null) {
+        if (pageBg != null) {
             Box(Modifier.fillMaxSize().padding(start = railWidth)) {
                 Image(
-                    bitmap = bg,
+                    bitmap = pageBg,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
                         .fillMaxSize()
                         .then(
-                            if (blurred) {
-                                Modifier.blur(26.dp, edgeTreatment = BlurredEdgeTreatment.Rectangle)
+                            // 底图原来写死 26dp，壁纸写死 32dp（比例 ≈ 0.8）。
+                            // 现在都吃同一个滑块，比例保持不变。
+                            if (bgBlur * 0.8f > 0.dp) {
+                                Modifier.blur(
+                                    bgBlur * 0.8f,
+                                    edgeTreatment = BlurredEdgeTreatment.Rectangle,
+                                )
                             } else {
                                 Modifier
                             }
                         ),
                 )
-                if (blurred) {
-                    Box(
-                        Modifier.fillMaxSize().background(
-                            MiuixTheme.colorScheme.surface.copy(
-                                alpha = if (darkScrim) 0.72f else 0.55f
-                            )
-                        )
-                    )
-                }
             }
         }
+    }
+}
+
+/**
+ * 背景上面那几层纱。**画在 layerBackdrop 外面** —— 纱是给眼睛看的，
+ * 折进卡片就是一片黑（老注释里踩过）。
+ */
+@Composable
+private fun AppBackdropScrim(
+    panorama: Boolean,
+    railWidth: androidx.compose.ui.unit.Dp,
+    darkScrim: Boolean,
+    hasPageBg: Boolean,
+) {
+    // 壁纸那层压黑 + 导轨渐变
+    if (panorama) {
+        HomeSceneDecor(railWidth = railWidth, fullScrim = !hasPageBg)
+    }
+    // 内容页底图上面那层面板色（原来跟在底图后面画，现在挪到这儿，效果一样）
+    if (hasPageBg) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .padding(start = railWidth)
+                .background(
+                    MiuixTheme.colorScheme.surface.copy(alpha = if (darkScrim) 0.72f else 0.55f)
+                )
+        )
     }
 }
 
@@ -647,90 +666,87 @@ private fun AppBackdropLayer(
 /**
  * 切背景的那层涟漪。
  *
- * ## 为什么要被调用两次
+ * ## 1.00.0 改了四件事
  *
- * 它得**同时**出现在两个地方：
- *   ① `layerBackdrop` 那层（素材层）—— 卡片里的玻璃要采样到它，
- *      这样卡片才会跟着背景一起变（用户说的"卡片要实时渲染"）
- *   ② 视觉层 —— 不然用户眼睛看不到它（被模糊+压黑盖住了）
+ * **① 只画一遍。** 原来素材层、视觉层各画一份（"两边是同步的"），
+ * 现在它就在被卡片采样的那一层里，卡片自然跟着变，不用再复制一份给眼睛。
  *
- * 两次画的是同一份数据（BgRipples），所以看起来是同步的。
+ * **② 队列。** 每条涟漪自带它要推出来的那张图（`BgRipples.Ripple.to`），
+ * 按时间顺序叠着画 —— 连点三次就三条，每条都会跑完自己那 800ms。
+ * 原来只有一个 pending 槽位 + 外壳里一对 shown/pending，后一次直接顶掉前一次，
+ * 用户看到的就是"只有最后一次生效"。
+ *
+ * **③ 跟着背景一起糊。** 整个 Canvas 挂上跟壁纸**同一个**模糊半径。
+ * 原来它画在模糊层之上、画的是清晰原图，于是过渡那 800ms 里圆内 sharp、
+ * 圆外 blur，结束瞬间整屏跳回糊的 —— 就是用户报的"图片未进行模糊就直接投影"。
+ * 顺带：有了真模糊，原来那 12 层"假模糊带"砍到 3 层就够了，省一大截绘制。
+ * 底层那张旧图也不用再铺了（下面那层已经画过同一张，重复铺纯属白烧）。
+ *
+ * **④ 帧驱动只在跑的时候存在。** 原来是 `LaunchedEffect(Unit) { while(true) { delay(33) } }`
+ * 常驻空转，而且画两遍 = **两个**这样的协程。现在队列一空就退出，
+ * 空闲时一个协程都不留；帧号在**绘制阶段**读，所以每帧只让绘制失效，不触发重组。
  */
 @Composable
 private fun RippleLayer(
-    /** 底层现在显示的那张 */
+    /** 底层现在显示的那张（涟漪从它上面长出来） */
     shown: ImageBitmap?,
-    /** 等着被推出来的新图 */
-    pending: ImageBitmap?,
-    /**
-     * 卡片采样用的那个 backdrop。
-     *
-     * ## 为什么必须传进来
-     *
-     * `com.kyant.backdrop` 的 `layerBackdrop` 里写着
-     * `shouldAutoInvalidate = false` —— 意思是它**不会每帧重录**，
-     * 只有被显式 `invalidate()` 才会。
-     *
-     * 而涟漪是逐帧在动的：不主动让它失效的话，卡片采到的永远是
-     * "涟漪刚开始那一帧"，看着就是**卡片不跟着背景变**。
-     *
-     * 所以这里每帧调一次 `graphicsLayer.invalidate()`，逼它重录。
-     */
-    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop?,
+    /** 跟壁纸同一个模糊半径 —— 圆里圆外必须一种糊法 */
+    bgBlur: androidx.compose.ui.unit.Dp,
 ) {
-    // ============================================================
-    //  切背景的那层涟漪
-    // ============================================================
-    //
-    // 画法：**先铺旧图**（铺满），再在**圆内画新图** ——
-    // 圆扩到哪儿，哪儿才变；没扩到的还是旧图。
-    //
-    // 这一版解决两个问题：
-    //
-    //  ① **卡死**
-    //     以前每帧画两张全屏位图，而且 `clipPath` 在 Compose 里会
-    //     **强制创建一个离屏图层** —— 全屏离屏两遍，手机上必卡。
-    //     现在：降到 30fps + 用 `clipRect` 把绘制锁在涟漪的包围盒里。
-    //
-    //  ② **边界太硬**
-    //     以前是边界画一圈白色"玻璃边"，用户要的是**混合模糊过渡**。
-    //     现在把边界那圈做宽（九十来个 px）并且**让新图在边界上淡出** ——
-    //     淡出的地方底下正好是旧图，看起来就是新旧糊在一起。
-    //     （Canvas 里没有真模糊，这是最接近的近似；省电模式一开就彻底不画。）
-    // ============================================================
-
+    // 组合期只读这一个：决定要不要挂帧循环（队列一变就重组，一次过渡也就两三次）
+    val running = lo.naui.ui.theme.BgRipples.running
     var frameTick by remember { mutableIntStateOf(0) }
-    LaunchedEffect(Unit) {
+
+    LaunchedEffect(running) {
+        if (!running) return@LaunchedEffect
+        var f = 0
         while (true) {
-            if (lo.naui.ui.theme.BgRipples.active().isNotEmpty()) {
-                frameTick++
-            }
-            // ⚠️ 30fps（原来是 16ms = 60fps）。
-            // 涟漪本来就是慢慢扩的，30fps 肉眼看不出区别，
-            // 但 GPU 压力直接减半 —— 这是"大图卡死"最主要的一刀。
-            kotlinx.coroutines.delay(33)
+            // 跟渲染对齐（原来用 delay(33)，那个跟帧不同步，会撕裂也会白跑）
+            androidx.compose.runtime.withFrameNanos { }
+
+            // ⚠️ 但**只每两帧推一次**，等于 30fps。
+            // 前人把涟漪从 60 降到 30 是拿实机卡顿换来的（坑 #45），这刀得留着：
+            // 现在涟漪每帧还带着壁纸模糊 + backdrop 重录 + 卡片重采样一起跑，
+            // 帧率翻倍就是全套开销翻倍。涟漪本来就是慢慢扩的，30fps 肉眼看不出。
+            if (f++ % 2 == 0) frameTick++
+
+            // 把跑完的摘掉 —— 摘空的那一刻队列变化会通知外壳"该扶正背景了"
+            lo.naui.ui.theme.BgRipples.prune(System.currentTimeMillis())
+            if (!lo.naui.ui.theme.BgRipples.running) break
         }
     }
 
-    val ripples = lo.naui.ui.theme.BgRipples.active()
-    @Suppress("UNUSED_EXPRESSION")
-    run { frameTick }
+    if (!running || shown == null) return
 
-    if (ripples.isEmpty() || shown == null || pending == null) return
+    androidx.compose.foundation.Canvas(
+        Modifier
+            .fillMaxSize()
+            .then(
+                if (bgBlur > 0.dp) {
+                    Modifier.blur(bgBlur, edgeTreatment = BlurredEdgeTreatment.Rectangle)
+                } else {
+                    Modifier
+                }
+            )
+    ) {
+        // 在**绘制阶段**读帧号：每帧只让这一个节点重绘，不触发重组
+        @Suppress("UNUSED_EXPRESSION")
+        frameTick
 
-    androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
         val now = System.currentTimeMillis()
+        val ripples = lo.naui.ui.theme.BgRipples.active(now)
+        if (ripples.isEmpty()) return@Canvas
+
         val dstSize = androidx.compose.ui.unit.IntSize(
             size.width.toInt(), size.height.toInt()
         )
         val blurBand = BLUR_BAND_PX
 
-        // ---- 先算清楚每个圆的位置和半径 ----
-        //
-        // ⚠️ 不能在这儿写 data class —— **Kotlin 不允许局部 data class**。
-        // 用 Triple 装 (cx, cy, radius)，progress 从 ripples 那边再取一次就行。
-        val holes = ripples.map { r ->
+        // 一条一条按时间顺序叠：后一条的圆扩过来才盖住前一条，
+        // 所以每一次切换都看得到它自己那趟扩散跑完。
+        ripples.forEach { r ->
             val pr = lo.naui.ui.theme.BgRipples.progressOf(r, now)
+            val img = r.to
             val cx = size.width * r.cx
             val cy = size.height * r.cy
             val maxR = maxOf(
@@ -739,29 +755,25 @@ private fun RippleLayer(
                 kotlin.math.hypot(cx, size.height - cy),
                 kotlin.math.hypot(size.width - cx, size.height - cy),
             )
-            Triple(cx, cy, (maxR * pr).coerceAtLeast(1f))
-        }
-
-        // ---- 第一步：旧图铺满 ----
-        // 这一张是全屏的，省不掉（它就是"过渡期间你看到的那张"）。
-        drawImage(
-            image = shown,
-            srcOffset = androidx.compose.ui.unit.IntOffset.Zero,
-            srcSize = androidx.compose.ui.unit.IntSize(shown.width, shown.height),
-            dstOffset = androidx.compose.ui.unit.IntOffset.Zero,
-            dstSize = dstSize,
-        )
-
-        // ---- 第二步：圆内叠新图 ----
-        //
-        // 每张新图只画在**它自己那个圆的包围盒**里 ——
-        // 用 clipRect 而不是 clipPath（前者便宜得多，不会全屏离屏）。
-        //
-        // 边界那圈：把圆切成很多层，靠外的层 alpha 越低。
-        // 这样边界就是"新图慢慢淡出、旧图慢慢露出来" = 混合糊过去。
-        holes.forEachIndexed { holeIdx, hole ->
-            val (cx, cy, radius) = hole
+            val radius = (maxR * pr).coerceAtLeast(1f)
             val outer = radius + blurBand
+
+            // ---- 按 Crop 算源矩形 ----
+            //
+            // ⚠️ 原来这里是 srcSize = 整张图、dstSize = 整个屏幕，等于 FillBounds
+            //（直接拉满），而背景那张壁纸走的是 ContentScale.Crop。
+            // 同一张图两种裁法 → 圆的边上看得见错位，看着就像"新图直接投影上去的"
+            //（用户报的正是这个）。现在按 Crop 的算法取中间那块，跟背景对齐。
+            val scale = maxOf(size.width / img.width, size.height / img.height)
+            val srcW = (size.width / scale).toInt().coerceIn(1, img.width)
+            val srcH = (size.height / scale).toInt().coerceIn(1, img.height)
+            val srcOff = androidx.compose.ui.unit.IntOffset(
+                (img.width - srcW) / 2, (img.height - srcH) / 2
+            )
+            val srcSz = androidx.compose.ui.unit.IntSize(srcW, srcH)
+
+            // 用 clipRect 把绘制锁在这个圆的包围盒里 ——
+            // clipPath 会强制全屏离屏，那个是"大图卡死"的老原因（坑 #45）
             clipRect(
                 left = (cx - outer).coerceAtLeast(0f),
                 top = (cy - outer).coerceAtLeast(0f),
@@ -771,9 +783,6 @@ private fun RippleLayer(
                 // 实心部分：半径减掉模糊带以内，完全不透明
                 val solid = (radius - blurBand).coerceAtLeast(0f)
                 if (solid > 1f) {
-                    // 用一个圆当"模具"：先画图，再用 BlendMode 裁不出来，
-                    // 所以这里换思路 —— 直接画一个被 clipPath 限定的图，
-                    // 但 clipPath 的 path 只有这一个圆（不是全屏），代价可控。
                     val solidPath = androidx.compose.ui.graphics.Path().apply {
                         addOval(
                             androidx.compose.ui.geometry.Rect(
@@ -783,42 +792,36 @@ private fun RippleLayer(
                     }
                     clipPath(solidPath) {
                         drawImage(
-                            image = pending,
-                            srcOffset = androidx.compose.ui.unit.IntOffset.Zero,
-                            srcSize = androidx.compose.ui.unit.IntSize(pending.width, pending.height),
+                            image = img,
+                            srcOffset = srcOff,
+                            srcSize = srcSz,
                             dstOffset = androidx.compose.ui.unit.IntOffset.Zero,
                             dstSize = dstSize,
                         )
                     }
                 }
 
-                // 模糊带：一圈一圈往外，alpha 递减
-                // 12 层够平滑了，再多就是白烧
-                val layers = 12
-                val holeProgress = lo.naui.ui.theme.BgRipples
-                    .progressOf(ripples[holeIdx], now).coerceIn(0f, 1f)
-
+                // 边界那圈淡出：3 层够了 —— 整层还挂着真模糊，
+                // 原来那 12 层假模糊带是在"没有真模糊"的年代用来凑柔和边的。
+                val layers = 3
                 for (i in layers downTo 1) {
                     val t = i / layers.toFloat()
-                    val r = radius + blurBand * (1f - t)
-                    if (r <= solid) continue
-                    val a = t * t          // 平方衰减，边缘更软
+                    val rr = radius + blurBand * (1f - t)
+                    if (rr <= solid) continue
+                    val a = t * t * pr        // 平方衰减，边缘更软；跟着进度淡入
                     val ring = androidx.compose.ui.graphics.Path().apply {
                         addOval(
-                            androidx.compose.ui.geometry.Rect(
-                                cx - r, cy - r, cx + r, cy + r
-                            )
+                            androidx.compose.ui.geometry.Rect(cx - rr, cy - rr, cx + rr, cy + rr)
                         )
                     }
                     clipPath(ring) {
                         drawImage(
-                            image = pending,
-                            srcOffset = androidx.compose.ui.unit.IntOffset.Zero,
-                            srcSize = androidx.compose.ui.unit.IntSize(pending.width, pending.height),
+                            image = img,
+                            srcOffset = srcOff,
+                            srcSize = srcSz,
                             dstOffset = androidx.compose.ui.unit.IntOffset.Zero,
                             dstSize = dstSize,
-                            alpha = a * holeProgress,
-                            blendMode = androidx.compose.ui.graphics.BlendMode.SrcOver,
+                            alpha = a,
                         )
                     }
                 }

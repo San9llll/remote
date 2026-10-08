@@ -42,6 +42,13 @@ data class ChatAttachment(
  *
  * 不用 okhttp —— 这里只有「发一个 JSON、收一个 JSON」，
  * HttpURLConnection 是 JDK 自带的，少一个依赖少一份风险。
+ *
+ * ⚠️ **成功路径上不要调 `conn.disconnect()`**（1.00.0 踩的）：
+ * 正文读完之后不 disconnect，socket 会回到 JDK 的 keep-alive 缓存里，
+ * 下一条请求就能复用，省掉一次 DNS + TCP + TLS 握手。
+ * 工具循环一轮一个请求（默认最多 8 轮），原来每轮都重新握手 ——
+ * 移动网络上一次握手两三百毫秒，全花在等首字上。
+ * 只有**没把正文读完**的错误路径才需要手动 disconnect。
  */
 object AgentApi {
 
@@ -75,7 +82,10 @@ object AgentApi {
         val code = conn.responseCode
         val stream = if (code in 200..299) conn.inputStream else conn.errorStream
         val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
-        conn.disconnect()
+        // ⚠️ 这儿**故意不 disconnect**：正文已经读干净了，socket 会进 JDK 的
+        // keep-alive 缓存，下一条请求直接复用 —— 省掉一次 DNS + TCP + TLS 握手。
+        // 工具循环一轮一个请求，最多 8 轮，原来每轮都重新握手（首字延迟里
+        // 移动网络上一次握手就是两三百毫秒）。只有出错那条路才需要 disconnect。
 
         if (code !in 200..299) {
             val msg = runCatching {
@@ -130,7 +140,10 @@ object AgentApi {
         val code = conn.responseCode
         val stream = if (code in 200..299) conn.inputStream else conn.errorStream
         val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
-        conn.disconnect()
+        // ⚠️ 这儿**故意不 disconnect**：正文已经读干净了，socket 会进 JDK 的
+        // keep-alive 缓存，下一条请求直接复用 —— 省掉一次 DNS + TCP + TLS 握手。
+        // 工具循环一轮一个请求，最多 8 轮，原来每轮都重新握手（首字延迟里
+        // 移动网络上一次握手就是两三百毫秒）。只有出错那条路才需要 disconnect。
 
         if (code !in 200..299) {
             val msg = runCatching { JSONObject(body).optJSONObject("error")?.optString("message") }.getOrNull()
@@ -277,7 +290,7 @@ object AgentApi {
                 }
             }
         }
-        conn.disconnect()
+        // 同样不 disconnect：SSE 已经读到 EOF，连接可以留给下一轮复用
 
         val calls = callBuf.entries.sortedBy { it.key }.mapNotNull { (i, buf) ->
             val name = buf.second.toString().trim()
@@ -373,7 +386,7 @@ object AgentApi {
         val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
             ?.bufferedReader()?.use { it.readText() }.orEmpty()
         val elapsed = System.currentTimeMillis() - startedAt
-        conn.disconnect()
+        // 不 disconnect，留给下一条请求复用（见上面 complete 那段注释）
         if (code !in 200..299) {
             val msg = runCatching { JSONObject(body).optJSONObject("error")?.optString("message") }.getOrNull()
             throw IllegalStateException("HTTP " + code + "：" + (msg?.takeIf { it.isNotBlank() } ?: body.take(300)))
@@ -430,8 +443,10 @@ object AgentApi {
             val code = conn.responseCode
             val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
                 ?.bufferedReader()?.use { it.readText() }.orEmpty()
-            conn.disconnect()
-            if (code !in 200..299) throw IllegalStateException("HTTP " + code + "：" + body.take(160))
+            if (code !in 200..299) {
+                conn.disconnect()      // 只有这条路没把正文用完，得手动收
+                throw IllegalStateException("HTTP " + code + "：" + body.take(160))
+            }
 
             val out = mutableListOf<String>()
             runCatching {

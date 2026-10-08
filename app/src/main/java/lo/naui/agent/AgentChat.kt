@@ -123,7 +123,10 @@ object AgentChat {
              * 其中一大块是模型**卡在同一个动作上反复撞**（命令报错、它换个写法再试、还错…）。
              * astrbot 那边也有类似的"别让它钻牛角尖"的机制。
              *
-             * 这里定：同一个工具**连着失败 4 次**就强制收手，把情况说给用户听。
+             * 这里定：同一个工具**连着失败 3 次**就强制收手，把情况说给用户听。
+             *（1.00.0 从 4 改成 3：每一次失败都是一整轮请求 —— 组历史、发过去、
+             *  等首字、跑工具，用户干等着。第 4 次几乎从来没有"这次不一样"，
+             *  省下来那一轮比多试一次值钱。）
              */
             var lastFailedTool = ""
             var consecutiveFail = 0
@@ -288,7 +291,7 @@ object AgentChat {
                             lastFailedTool = call.name
                             consecutiveFail = 1
                         }
-                        if (consecutiveFail >= 4) {
+                        if (consecutiveFail >= 3) {
                             // 别让它继续撞了
                             AgentTaskStore.updateRunningTool(conversationId, "", "")
                             return@runCatching AgentRun(

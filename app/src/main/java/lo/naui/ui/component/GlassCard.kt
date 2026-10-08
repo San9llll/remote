@@ -92,7 +92,9 @@ fun GlassCard(
     }
     LaunchedEffect(enterIndex) {
         if (enterIndex >= 0) {
-            kotlinx.coroutines.delay(enterIndex * 55L)   // 按序号错开
+            // 按序号错开，但**封顶 6 个** —— 长列表里第 20 张卡原来要等 1.1 秒才落位，
+            // 用户滚下去看到的是一堆还在飞的卡片（而且每张都在跑 spring）。
+            kotlinx.coroutines.delay(minOf(enterIndex, 6) * 55L)
             entered = true
         }
     }
@@ -118,7 +120,9 @@ fun GlassCard(
     val prefs = Prefs.current
     val radius = (prefs?.glassRadius ?: 20).dp
     val realShape: Shape = shape ?: RoundedCornerShape(radius)
-    val blurDp = prefs?.glassBlur ?: 0f
+    // ⚠️ 兜底值要跟 ThemePrefs 里的默认值一致（1.00.0 起是 18f，不是 0f）——
+    // 液态玻璃成了默认之后，模糊给 0 就等于把背景原样贴进卡片，看着像贴片不像玻璃。
+    val blurDp = prefs?.glassBlur ?: 18f
     val lensDp = prefs?.glassLens ?: 20f
     // 深色下玻璃要更"实"，不然字看不清
     val alpha = (prefs?.glassAlpha ?: 0.58f) + if (isDark) 0.12f else 0f

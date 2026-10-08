@@ -52,7 +52,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
  * ```
  *
  * 中途退出会记住走到第几步（[SetupStore.lastStep]），下次接着来。
- * 走完置为 done，以后不再出现 —— 想再看就用**设置里的开发者工具**重置。
+ * 走完置为 done，以后不再出现 —— 想再看就去「设置 → 关于」连点版本号 5 次。
  */
 @Composable
 fun SetupScreen(onFinish: () -> Unit) {
@@ -356,7 +356,7 @@ fun SetupScreen(onFinish: () -> Unit) {
                     Spacer(Modifier.height(24.dp))
                     Text(
                         "随时能在设置里改。想重新走一遍这个流程，" +
-                            "去「设置 → 开发者工具 → 重新走一遍准备界面」。",
+                            "去「设置 → 关于」连点版本号 5 次。",
                         fontSize = 11.5.sp,
                         color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                     )

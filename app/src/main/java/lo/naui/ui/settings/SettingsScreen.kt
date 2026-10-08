@@ -108,21 +108,6 @@ fun SettingsScreen(
                 }
             }
 
-            // ---- 依赖 ----
-            // 用户要的：在后台终端里下编译 APK 要的包
-            item(key = "deps") {
-                SectionTitle("依赖")
-                BuildDepsCard()
-            }
-
-            // ---- 开发者工具 ----
-            // 用户要的：在已有数据的情况下，把"只有第一次进门才会出现"的
-            // 界面再触发一遍。主要就是准备引导那套。
-            item(key = "devtools") {
-                SectionTitle("开发者工具")
-                DevToolsCard()
-            }
-
             item(key = "about") {
                 SectionTitle("关于")
                 SettingsCard(index = 2) {

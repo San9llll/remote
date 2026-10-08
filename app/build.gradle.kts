@@ -24,8 +24,13 @@ android {
         // 那 termux 的二进制（全在 $PREFIX/bin 下）就一个都跑不起来。
         // termux 官方也是这么绕的，代价是上不了 Play。
         targetSdk = 28
-        versionCode = 88
-        versionName = "0.88.0"
+
+        // 版本号规则（从 1.00.0 起）：versionName 是 "1.XX.0"，versionCode 就是 100 + XX。
+        //   1.00.0 → 100    1.01.0 → 101    1.02.0 → 102 ……
+        // tag 打成 v1.XX（UpdateChecker.isNewer 按 "." 逐段比数字，
+        // "1.01" 和 "1.01.0" 比出来是相等，不会误报有新版）。
+        versionCode = 100
+        versionName = "1.00.0"
 
         // 只打 arm64-v8a。
         // 一来机器就是 arm64，多带别的 ABI 纯属白占体积；

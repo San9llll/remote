@@ -121,15 +121,57 @@ fun AboutScreen(onBack: () -> Unit = {}) {
             Spacer(Modifier.height(10.dp))
         }
 
+        // ---- 顶部小卡片 ----
+        //
+        // 用户要的：Nakour + 版本号做成一张**液态玻璃**小卡片，
+        // 卡片下面一行小字署名。
+        //
+        // 顺带把原来「开发者工具 → 重新走一遍准备界面」那个后门挪到这儿：
+        // **连点版本号 5 次** = 重置首次标记并立刻回到准备界面。
+        //（开发者工具整个分区已经删了，这是唯一入口，所以不做任何视觉提示）
         Column(
             Modifier.fillMaxWidth().padding(vertical = 18.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Text("Nakour", fontSize = 19.sp, fontWeight = FontWeight.Bold)
+            var taps by remember { mutableStateOf(0) }
+
+            GlassCard(modifier = Modifier.fillMaxWidth().padding(horizontal = 28.dp)) {
+                Column(
+                    Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text("Nakour", fontSize = 19.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        "v" + BuildConfig.VERSION_NAME,
+                        fontSize = 12.5.sp,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        modifier = Modifier.clickable {
+                            taps++
+                            if (taps < 5) return@clickable
+                            taps = 0
+                            lo.naui.ui.setup.SetupStore.init(ctx)
+                            lo.naui.ui.setup.SetupStore.reset()
+                            // 光重置标记不够 —— MainActivity 那个 setupDoneFlag 是
+                            // remember 出来的一次性值，本进程内不会再读第二遍。
+                            // 所以直接把 Activity 重建，onCreate 重跑就会走准备界面。
+                            val act = findActivity(ctx)
+                            if (act != null) {
+                                act.recreate()
+                            } else {
+                                android.widget.Toast
+                                    .makeText(ctx, "重置好了，重启 App 就能看到准备界面", android.widget.Toast.LENGTH_SHORT)
+                                    .show()
+                            }
+                        },
+                    )
+                }
+            }
+
             Text(
-                "v" + BuildConfig.VERSION_NAME,
-                fontSize = 12.5.sp,
+                "Qwen x DeepSeek",
+                fontSize = 11.sp,
                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
             )
         }
@@ -309,5 +351,21 @@ private fun Row2(title: String, value: String) {
     ) {
         Text(title, fontSize = 14.sp, modifier = Modifier.weight(1f))
         Text(value, fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+    }
+}
+
+/**
+ * 从 Compose 给的 Context 里把 Activity 挖出来。
+ *
+ * LocalContext 拿到的常常是 ContextWrapper（主题包一层、Compose 再包一层），
+ * 直接 `as Activity` 会 ClassCastException。⚠️ 也别用 `this` ——
+ * composable 的 lambda 里 `this` 不是 Activity（这个坑项目里踩过）。
+ */
+private fun findActivity(c: android.content.Context): android.app.Activity? {
+    var cur: android.content.Context = c
+    while (true) {
+        if (cur is android.app.Activity) return cur
+        if (cur !is android.content.ContextWrapper) return null
+        cur = cur.baseContext
     }
 }

@@ -45,6 +45,7 @@ object AgentStore {
      * 以前写死 8，一撞到就卡在"工具已经使用 8 次"。现在可配，**0 = 不限**。
      */
     var maxToolRounds by mutableStateOf(16)
+        private set
 
     /**
      * 模型上下文长度（token，粗略估：1 token ≈ 1.5 字符）。
@@ -55,12 +56,12 @@ object AgentStore {
      * 设太小会过早压缩（丢细节），设太大有服务商直接报 400 —— 所以做成可选项。
      */
     var contextLimit by mutableStateOf(64_000)
+        private set
 
     fun updateContextLimit(v: Int) {
         contextLimit = if (v <= 0) 64_000 else v
         sp?.edit()?.putInt("context_limit", contextLimit)?.apply()
     }
-        private set
 
     fun updateMaxToolRounds(v: Int) {
         // **0 或负数 = 不限轮数**（用户要的"无限工具使用次数"）。

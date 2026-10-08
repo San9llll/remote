@@ -38,10 +38,10 @@ import java.util.zip.ZipOutputStream
  * /system/bin 里有没有 toybox，赌输了模型只收到一句"执行失败"，然后开始换写法硬撞。
  * 现在纯 java.io 遍历，不依赖任何外部二进制。
  *
- * ## 7z 为什么明写拒绝
+ * ## 7z
  *
- * 7z 要引第三方库（commons-compress / tukaani-xz），仓库里没有。与其手写个残缺
- * LZMA，不如照实拒绝并把替代路子说清楚。zip / jar / apk / tar / tar.gz / gz 都做了。
+ * 1.02.0 起支持（用户批准加了 commons-compress + tukaani-xz 两个依赖）。
+ * 里面的加密条目解不开会照实报"需要密码"，不让模型把"解不开"当成"我命令写错了"。
  */
 object AgentFsOps {
 
@@ -517,7 +517,21 @@ object AgentFsOps {
             val f = File(p)
             if (!f.isFile) return@withContext ToolResult(false, "那不是文件：" + p)
             if (f.name.endsWith(".7z", true)) {
-                return@withContext ToolResult(false, REJECT_7Z)
+                return@withContext runCatching {
+                    org.apache.commons.compress.archivers.sevenz.SevenZFile.builder().setFile(f).get().use { z ->
+                        val entries = z.entries.toList()
+                        val sb = StringBuilder("共 ${entries.size} 项：\n")
+                        entries.take(400).forEach { e ->
+                            sb.append(if (e.isDirectory) "d " else "f ")
+                                .append(human(e.size).padEnd(9))
+                                .append(e.name)
+                            if (e.isEncrypted()) sb.append("  🔒加密（解不开，需要密码）")
+                            sb.append('\n')
+                        }
+                        if (entries.size > 400) sb.append("…（只显示前 400 项）")
+                        ToolResult(true, sb.toString())
+                    }
+                }.getOrElse { ToolResult(false, "7z 读不出来：" + (it.message ?: it.javaClass.simpleName)) }
             }
             if (f.name.endsWith(".tar", true)) {
                 return@withContext ToolResult(true, "tar 没有中央目录，列不了；直接 archive_extract 解出来再看。")
@@ -566,7 +580,43 @@ object AgentFsOps {
         val src = File(srcP)
         val dst = File(dstP)
         if (!src.isFile) return@withContext ToolResult(false, "那不是文件：" + srcP)
-        if (src.name.endsWith(".7z", true)) return@withContext ToolResult(false, REJECT_7Z)
+        if (src.name.endsWith(".7z", true)) {
+            // 7z：同样要过 zip-slip 那道检查（entry 名可以写 ../../../）
+            return@withContext runCatching {
+                var n7 = 0
+                var bad7 = 0
+                var encrypted = 0
+                org.apache.commons.compress.archivers.sevenz.SevenZFile.builder().setFile(src).get().use { z ->
+                    z.entries.forEach { e ->
+                        if (e.isDirectory) return@forEach
+                        if (e.isEncrypted()) {
+                            encrypted++
+                            return@forEach
+                        }
+                        val target = File(dst, e.name).canonicalFile
+                        if (!inside(target.path, dstCanon)) {
+                            bad7++
+                            return@forEach
+                        }
+                        target.parentFile?.mkdirs()
+                        val buf = ByteArray(65536)
+                        FileOutputStream(target).use { out ->
+                            while (true) {
+                                val r = z.read(buf)
+                                if (r <= 0) break
+                                out.write(buf, 0, r)
+                            }
+                        }
+                        n7++
+                    }
+                }
+                val tail = buildString {
+                    if (bad7 > 0) append("（拦下 $bad7 个想写到外面的条目 —— zip-slip 防护）")
+                    if (encrypted > 0) append("，另有 $encrypted 个加密条目解不开（需要密码）")
+                }
+                ToolResult(true, "解出 $n7 个文件到 " + dst.path + tail)
+            }.getOrElse { ToolResult(false, "7z 解压失败：" + (it.message ?: it.javaClass.simpleName)) }
+        }
         dst.mkdirs()
         val dstCanon = dst.canonicalPath
         var files = 0

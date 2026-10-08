@@ -272,8 +272,8 @@ object AgentTools {
         AgentTool(
             name = ARCHIVE,
             description = "压缩包：list 看里面有什么（不解压）、unpack 解压、pack 打包成 zip。\n" +
-                "支持 zip / jar / apk / tar / tar.gz / gz。\n" +
-                "⚠️ **7z 做不了**（项目没引 LZMA 依赖），碰到 7z 直接告诉用户，别硬试。\n" +
+                "支持 zip / jar / apk / tar / tar.gz / gz / **7z**（1.02.0 加的依赖）。\n" +
+                "⚠️ 7z 里的加密条目解不开时会照实回「需要密码」，那是包的事，不是你命令写错。\n" +
                 "解压带 zip-slip 防护：包里想写到目标目录外面的条目会被丢掉并计数。",
             properties = JSONObject()
                 .put("action", act("要干什么", "list", "unpack", "pack"))

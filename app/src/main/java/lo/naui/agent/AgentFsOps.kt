@@ -521,12 +521,12 @@ object AgentFsOps {
                     org.apache.commons.compress.archivers.sevenz.SevenZFile.builder().setFile(f).get().use { z ->
                         val entries = z.entries.toList()
                         val sb = StringBuilder("共 ${entries.size} 项：\n")
+                        // SevenZArchiveEntry 没有 isEncrypted()（commons-compress 不在条目上标加密），
+                        // 所以这里只列名字大小，加不加密要真去读才知道 —— 交给 extract 报。
                         entries.take(400).forEach { e ->
                             sb.append(if (e.isDirectory) "d " else "f ")
                                 .append(human(e.size).padEnd(9))
-                                .append(e.name)
-                            if (e.isEncrypted()) sb.append("  🔒加密（解不开，需要密码）")
-                            sb.append('\n')
+                                .append(e.name).append('\n')
                         }
                         if (entries.size > 400) sb.append("…（只显示前 400 项）")
                         ToolResult(true, sb.toString())
@@ -555,11 +555,6 @@ object AgentFsOps {
             }
         }
 
-    private const val REJECT_7Z =
-        "7z 处理不了：项目里没引 LZMA 依赖（commons-compress / tukaani-xz 都没有），" +
-            "我不会为了这一个格式偷偷加依赖。要么让用户换成 .zip，" +
-            "要么走 run_shell 调 Termux 里装的 7z（前提是真装了，没装先看 build_env）。"
-
     /**
      * 解压。
      *
@@ -581,42 +576,55 @@ object AgentFsOps {
         val dst = File(dstP)
         if (!src.isFile) return@withContext ToolResult(false, "那不是文件：" + srcP)
         if (src.name.endsWith(".7z", true)) {
-            // 7z：同样要过 zip-slip 那道检查（entry 名可以写 ../../../）
+            // 7z。两个坑都是 CI 教我的：
+            //  · 这一支在 dstCanon 定义**之前**，所以本地自己算一份 canon7；
+            //  · SevenZFile 一次只把一个 entry 的数据流到当前位置，必须 nextEntry 循环着读，
+            //    不能 z.entries.forEach 里直接 z.read()（那样第二个 entry 拿到的是上一个的尾巴）；
+            //  · 条目没有 isEncrypted()，加密只有真去读才报得出来 —— 那就读失败时按异常文案判断。
             return@withContext runCatching {
+                val canon7 = dst.canonicalPath
                 var n7 = 0
                 var bad7 = 0
-                var encrypted = 0
-                org.apache.commons.compress.archivers.sevenz.SevenZFile.builder().setFile(src).get().use { z ->
-                    z.entries.forEach { e ->
-                        if (e.isDirectory) return@forEach
-                        if (e.isEncrypted()) {
-                            encrypted++
-                            return@forEach
-                        }
-                        val target = File(dst, e.name).canonicalFile
-                        if (!inside(target.path, dstCanon)) {
-                            bad7++
-                            return@forEach
-                        }
-                        target.parentFile?.mkdirs()
+                var enc7 = 0
+                org.apache.commons.compress.archivers.sevenz.SevenZFile.builder()
+                    .setFile(src).get().use { z ->
                         val buf = ByteArray(65536)
-                        FileOutputStream(target).use { out ->
-                            while (true) {
-                                val r = z.read(buf)
-                                if (r <= 0) break
-                                out.write(buf, 0, r)
+                        while (true) {
+                            val e = z.nextEntry ?: break
+                            if (e.isDirectory) continue
+                            val target = File(dst, e.name).canonicalFile
+                            // zip-slip 同一套检查：包里写 ../../../system/xx 的一律丢
+                            if (!inside(target.path, canon7)) {
+                                bad7++
+                                continue
+                            }
+                            val r = runCatching {
+                                target.parentFile?.mkdirs()
+                                FileOutputStream(target).use { out ->
+                                    while (true) {
+                                        val got = z.read(buf)
+                                        if (got <= 0) break
+                                        out.write(buf, 0, got)
+                                    }
+                                }
+                            }
+                            if (r.isSuccess) {
+                                n7++
+                            } else {
+                                val m = (r.exceptionOrNull()?.message ?: "").lowercase(Locale.US)
+                                if (m.contains("encrypt") || m.contains("password")) enc7++
                             }
                         }
-                        n7++
                     }
+                val tail7 = buildString {
+                    if (bad7 > 0) append("（拦下 ").append(bad7).append(" 个想写到外面的条目 —— zip-slip 防护）")
+                    if (enc7 > 0) append("，另有 ").append(enc7).append(" 个加密条目解不开（要密码，不是命令写错）")
                 }
-                val tail = buildString {
-                    if (bad7 > 0) append("（拦下 $bad7 个想写到外面的条目 —— zip-slip 防护）")
-                    if (encrypted > 0) append("，另有 $encrypted 个加密条目解不开（需要密码）")
-                }
-                ToolResult(true, "解出 $n7 个文件到 " + dst.path + tail)
+                ToolResult(true, "解出 " + n7 + " 个文件到 " + dst.path + tail7)
             }.getOrElse { ToolResult(false, "7z 解压失败：" + (it.message ?: it.javaClass.simpleName)) }
         }
+
+
         dst.mkdirs()
         val dstCanon = dst.canonicalPath
         var files = 0

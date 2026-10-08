@@ -30,6 +30,7 @@ F = {
     "store": SRC + "/agent/AgentStore.kt",
     "chat": SRC + "/agent/AgentChat.kt",
     "rail": SRC + "/ui/home/HomeSceneRail.kt",
+    "home": SRC + "/ui/home/HomeScreen.kt",
 }
 
 
@@ -142,7 +143,7 @@ def main():
     rip = read("rip")
     ripc = code["rip"]
     need("val to: ImageBitmap" in rip, "Ripple 必须自带它要推出来的那张图（不然连点还是会互相顶掉）")
-    need("fun fire(to: ImageBitmap)" in rip, "fire 要接收新图")
+    need("fun fire(to: ImageBitmap" in rip, "fire 要接收新图")
     need("MAX_QUEUE" in ripc, "队列要有上限（连点十次堆十层全屏绘制 = 卡死）")
     need("fun prune(" in ripc, "得有 prune 把跑完的摘掉 —— 摘空那一下才会通知外壳扶正背景")
     need("settledTo" in ripc, "得有 settledTo 告诉外壳最后该换成哪张")
@@ -216,6 +217,25 @@ def main():
         "grep -rln 'BuildDeps\\|DevToolsCard\\|deployToWorkspace' %s 2>/dev/null" % SRC
     ).read().strip()
     need(not leftovers, "还有文件引用已删掉的东西：" + leftovers.replace("\n", ", "))
+
+    # ---------- ⑦' 上滑刷新 & 各页独自渲染（1.01 之后的两个 bug）----------
+    #
+    # ① 上滑刷新失效是我上一轮改出来的回归：fire() 写成了
+    #    `val p = pending ?: return`，而 HomeScreen 的上滑走的是
+    #    prefs.nextHero() → 外壳换图，**从来没有人 pend 过坐标** →
+    #    整条换图被静默丢弃。所以 fire 必须有默认圆心。
+    fire_body = rip[rip.index("fun fire("):]
+    fire_body = fire_body[:fire_body.index("\n    }")]
+    forbid("?: return" in fire_body,
+           "fire() 不许在没 pend 过坐标的时候把新图整个丢掉（上滑刷新就是这么废的）")
+    need("DEFAULT_ORIGIN" in rip, "没登记坐标时要用默认圆心，而不是不播")
+
+    # ② 用户不在首页时不要拿主页大图播全屏涟漪（主题页里换样式会糊一脸 hero）
+    need("onHeroPage" in shell, "换图要分『正在首页』和『不在首页』两条路")
+    need("current == Dest.Home" in shell, "判断有没有首页要用 current/sub")
+    # 上滑那条链路必须还在（nextHero 是入口）
+    need("nextHero(" in open(F["home"], encoding="utf-8").read(),
+         "上滑刷新入口 nextHero 必须还在")
 
     # ---------- ⑧' 第二次返工：玻璃必须折**清晰**背景 ----------
     #

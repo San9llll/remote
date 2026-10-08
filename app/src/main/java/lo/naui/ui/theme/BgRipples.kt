@@ -82,13 +82,29 @@ object BgRipples {
      */
     private var pending: Pair<Float, Float>? = null
 
+    /**
+     * 没登记坐标时的默认圆心（屏幕中间偏上一点）。
+     *
+     * ⚠️ 1.01.0 的回归就在这儿：fire() 那时候写的是 `pending ?: return` ——
+     * 可**上滑刷新换大图**这条路径压根没人 pend 过坐标（HomeScreen 走的是
+     * prefs.nextHero()，只有主题页那个三选一按钮才登记位置），
+     * 于是整条换图被静默丢掉，实机表现就是"上滑刷新没反应"。
+     * 没坐标不是"别换图"的理由，用默认圆心照样播。
+     */
+    private val DEFAULT_ORIGIN = 0.5f to 0.42f
+
     fun pend(x: Float, y: Float) {
         pending = x.coerceIn(0f, 1f) to y.coerceIn(0f, 1f)
     }
 
-    /** 图就绪了，把它排进队列开始扩散 */
-    fun fire(to: ImageBitmap) {
-        val p = pending ?: return
+    /**
+     * 图就绪了，把它排进队列开始扩散。
+     *
+     * @param origin 显式给的圆心（0~1 归一化）。给就用它 ——
+     *   上滑刷新这种"从手指来的"最好传滑动位置，别用默认那个。
+     */
+    fun fire(to: ImageBitmap, origin: Pair<Float, Float>? = null) {
+        val p = pending ?: origin ?: DEFAULT_ORIGIN
         pending = null
 
         val now = System.currentTimeMillis()

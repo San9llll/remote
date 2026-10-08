@@ -71,6 +71,10 @@ fun HomeScreen(
 
     suspend fun reload(changeHero: Boolean = false) {
         // 下拉刷新的时候顺手换一张大图 —— 用户要的"上滑刷新时切换"
+        // 上滑换大图。⚠️ 1.01.0 有个回归：BgRipples.fire() 当时写的是
+        // `pending ?: return`，而上滑这条路**从不 pend 坐标**（只有主题页
+        // 那个三选一按钮会登记位置），于是整条换图被静默丢掉 ——
+        // 表现就是"主页上滑刷新失效"。fire 现在有默认圆心，这条路通了。
         if (changeHero) prefs?.nextHero(ctx)
         topPriv = runCatching { Privilege.topInfo(ctx) }.getOrNull()
         deviceLine = Build.MANUFACTURER + " " + Build.MODEL

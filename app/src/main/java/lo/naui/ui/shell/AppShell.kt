@@ -190,13 +190,27 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
             val (seed, isLight) = lo.naui.ui.theme.dominantSeed(bmp)
             prefs.saveWallpaperSeed(seed, isLight)
 
+            // **这一刻是不是正在看首页大图**。协程里读 current/sub 读到的是当下的值，
+            // 又不在 key 里 —— 所以不会因为切页重启这个 effect，正是我要的语义。
+            val onHeroPage = current == Dest.Home && sub == Sub.None
+
             if (shownWallpaper == null && !lo.naui.ui.theme.BgRipples.running) {
                 // 头一次加载：没有旧图可过渡，直接上
                 shownWallpaper = img
                 wallpaper = img
                 lo.naui.ui.theme.BgRipples.clear()
+            } else if (!onHeroPage) {
+                // 不在首页（比如在主题页里换样式 / 挑自定义图）：
+                // **直接换掉，不播涟漪**。涟漪画的是全屏大图，用户在主题页操作
+                // 却看到主页那张大图在背后推开 —— 这就是"切换主题时各个页
+                // 独自渲染"要解决的事：每张页的背景归每张页自己渲染，
+                // 人不在首页，外壳就别拿 hero 抢画面。
+                //（回到首页时看到的就是已经换好的新图，没有多余动画。）
+                lo.naui.ui.theme.BgRipples.clear()
+                shownWallpaper = img
+                wallpaper = img
             } else {
-                // 换图：排进涟漪队列，由涟漪把它推出来。
+                // 在首页换图：排进涟漪队列，由涟漪把它推出来。
                 // 底层这张**先不动** —— 动了就等于跳过动画直接换图。
                 lo.naui.ui.theme.BgRipples.fire(img)
             }

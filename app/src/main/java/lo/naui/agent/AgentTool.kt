@@ -56,6 +56,8 @@ object AgentTools {
     const val WRITE = "write_file"
     const val LIST = "list_dir"
     const val DEVICE = "device_info"
+    const val DOWNLOAD = "start_download"
+    const val DOWNLOAD_CHECK = "check_download"
 
     val ALL: List<AgentTool> = listOf(
         AgentTool(
@@ -151,6 +153,33 @@ object AgentTools {
             properties = JSONObject(),
             required = emptyList(),
         ),
+        AgentTool(
+            name = DOWNLOAD,
+            description = "**后台下载一个文件。立刻返回一个 id，不等它下完。**\n\n" +
+                "要下东西**优先用这个**，别用 run_shell 跑 curl / wget —— " +
+                "命令执行是有超时的，大文件必然被掐断，而模型看不出是被掐了就会一直重试，" +
+                "这台机器上真出过「51 次工具、30 次思考还没下好」。\n\n" +
+                "调完这条就接着干别的。想知道下没下好、下到百分之几，" +
+                "再发一条 check_download 问一句。",
+            properties = JSONObject()
+                .put("url", str("完整下载地址，得是 http:// 或 https:// 开头"))
+                .put("path", str(
+                    "存到哪儿。相对路径按沙箱根算（比如 downloads/app.zip）；" +
+                        "也可以给绝对路径（比如 /sdcard/Download/app.zip）。" +
+                        "**留空**就自动用地址里的文件名存到工作区（没设工作区就存进沙箱的 downloads/）。"
+                )),
+            required = listOf("url"),
+        ),
+        AgentTool(
+            name = DOWNLOAD_CHECK,
+            description = "问后台那些下载到哪儿了：下到百分之几、速度、完没完、失败原因。" +
+                "带 id 问一个，不带 id 就列出最近所有下载任务。\n\n" +
+                "**别空转反复问** —— 问一次心里有数就够了，" +
+                "它没下完之前先把别的活儿干完，或者直接跟用户说「在后台下着，稍后再看」。",
+            properties = JSONObject()
+                .put("id", str("start_download 返回的那个 id。留空就列最近的全部任务")),
+            required = emptyList(),
+        ),
     )
 
     /** 这个环境允许用哪些工具（沙箱少一点） */
@@ -175,9 +204,14 @@ object AgentTools {
         askUser: (suspend (DangerGuard.Hit) -> Boolean)? = null,
         /** 命令的实时输出行（下载进度靠它） */
         onLine: ((String) -> Unit)? = null,
+        /** 哪个会话在跑 —— 后台下载要往这一份的进度上报，不能串台 */
+        conversationId: String = "",
     ): ToolResult {
-        // 先过危险闸门
-        DangerGuard.risk(name, args)?.let { hit ->
+        // 先过危险闸门。
+        // 下载这条路是自己写文件、不走 shell 的，所以判危险得按**围栏解析之后**的
+        // 真实落点来 —— 不然「相对路径」看着人畜无害，解出来可能在系统目录里。
+        val target = if (name == DOWNLOAD) downloadTarget(ctx, env, args) else ""
+        DangerGuard.risk(name, args, env, target)?.let { hit ->
             when (AgentStore.dangerPolicy) {
                 DangerGuard.Policy.Deny -> return ToolResult(
                     false,
@@ -197,7 +231,7 @@ object AgentTools {
                 }
             }
         }
-        return runUnchecked(ctx, env, name, args, onLine)
+        return runUnchecked(ctx, env, name, args, onLine, conversationId)
     }
 
     private suspend fun runUnchecked(
@@ -206,6 +240,7 @@ object AgentTools {
         name: String,
         args: JSONObject,
         onLine: ((String) -> Unit)? = null,
+        conversationId: String = "",
     ): ToolResult = when (name) {
         SHELL -> AgentRunner.shell(
             ctx, env,
@@ -260,7 +295,114 @@ object AgentTools {
 
         DEVICE -> deviceInfo(ctx, env)
 
+        DOWNLOAD -> startDownload(ctx, env, conversationId, args)
+
+        DOWNLOAD_CHECK -> checkDownload(args)
+
         else -> ToolResult(false, "没有这个工具：" + name)
+    }
+
+    /* ================= 后台下载 ================= */
+
+    /**
+     * 起一个后台下载，**立刻返回**。
+     *
+     * 这里刻意不做任何"等一会儿"的事：下载全部在 Downloader 自己的
+     * 协程里跑，AI 这条工具调用几十毫秒就拿到 id 走人。
+     */
+    private fun startDownload(
+        ctx: Context,
+        env: AgentEnv,
+        conversationId: String,
+        args: JSONObject,
+    ): ToolResult {
+        val url = args.optString("url", "").trim()
+        if (url.isBlank()) return ToolResult(false, "url 是空的，给个完整下载地址。")
+        if (!(url.startsWith("http://") || url.startsWith("https://"))) {
+            return ToolResult(false, "url 得是 http:// 或 https:// 开头的完整地址，你给的是：" + url)
+        }
+
+        val target = downloadTarget(ctx, env, args)
+        if (target.isBlank()) {
+            val name = fileNameOf(url)
+            return ToolResult(
+                false,
+                "这个落点在沙箱外面，下不了：" + args.optString("path", "").trim() +
+                    "。要么换成相对沙箱根的路径（比如 downloads/" + name + "），" +
+                    "要么让用户在输入栏那个弹窗里切到「本机（root）」环境。",
+            )
+        }
+
+        val t = Downloader.start(ctx, conversationId, url, target)
+        return ToolResult(
+            true,
+            "已经在后台下起来了，这条不用等。\n" +
+                "id：" + t.id + "\n" +
+                "存到：" + target + "\n\n" +
+                "要进度就发一条 check_download(id=\"" + t.id + "\")。" +
+                "注意别连着追问 —— 先干别的，或者跟用户说一句「在后台下着」。",
+        )
+    }
+
+    /**
+     * 查后台下载到哪一步了。
+     *
+     * ⚠️ 这里**永远回 ok=true** —— "还在下"不是失败。
+     * 要是把没下完当成报错递回去，上面那个「同一工具连着失败 4 次就收手」的
+     * 计数器会把老老实实查进度的模型给掐了。
+     */
+    private fun checkDownload(args: JSONObject): ToolResult {
+        val id = args.optString("id", "").trim()
+        if (id.isNotBlank()) {
+            val t = Downloader.get(id)
+                ?: return ToolResult(
+                    true,
+                    "没有 id 为 " + id + " 的下载任务（可能早就清了）。" +
+                        "不带 id 再问一次，能列出最近所有的任务。",
+                )
+            return ToolResult(true, t.summary())
+        }
+        val list = Downloader.recent()
+        if (list.isEmpty()) return ToolResult(true, "现在没有任何后台下载任务。")
+        val sb = StringBuilder()
+        sb.append("最近 ").append(list.size).append(" 个下载任务：")
+        list.forEach { t -> sb.append("\n\n").append(t.summary()) }
+        return ToolResult(true, sb.toString())
+    }
+
+    /**
+     * 这次下载**实际**落到哪儿（已经过围栏）。
+     *
+     * 解不出来（沙箱模式下要往外写）就回空串 —— 上层要么拒、要么按危险路径弹窗。
+     * 危险闸门和真正执行都要用它，所以单独抽出来，两处算的是同一套规则。
+     */
+    private fun downloadTarget(ctx: Context, env: AgentEnv, args: JSONObject): String {
+        val wanted = args.optString("path", "").trim()
+        val raw = if (wanted.isNotBlank()) wanted else defaultDownloadTarget(args.optString("url", ""))
+        return AgentRunner.guardPath(ctx, env, raw) ?: ""
+    }
+
+    /**
+     * 没给路径的时候存到哪儿。
+     *
+     * 优先用户设的工作区 —— 那是他明确划给 Agent 的地盘；
+     * 没设就落回沙箱里的 downloads/（相对路径，围栏解得开）。
+     */
+    private fun defaultDownloadTarget(url: String): String {
+        val name = fileNameOf(url)
+        val ws = AgentStore.workspace.trim().removeSuffix("/")
+        return if (ws.isNotBlank()) ws + "/" + name else "downloads/" + name
+    }
+
+    /** 从地址里认个文件名出来，认不出来就按时间戳编一个 */
+    private fun fileNameOf(url: String): String {
+        val seg = url.substringBefore('#').substringBefore('?').substringAfterLast('/', "")
+        val decoded = runCatching { java.net.URLDecoder.decode(seg, "UTF-8") }.getOrDefault(seg)
+        val name = decoded.replace('/', '_').replace('\\', '_').trim()
+        if (name.isBlank() || name == "." || name == "..") {
+            return "download-" + System.currentTimeMillis()
+        }
+        return if (name.length > 120) name.take(120) else name
     }
 
     private suspend fun deviceInfo(ctx: Context, env: AgentEnv): ToolResult {

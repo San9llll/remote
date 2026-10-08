@@ -301,7 +301,14 @@ object DangerGuard {
         return Hit(cat, outside.first())
     }
     /** 不管什么工具，统一过一道 */
-    fun risk(tool: String, args: JSONObject): Hit? = when (tool) {
+    fun risk(
+        tool: String,
+        args: JSONObject,
+        /** 只有下载那条要用 —— 沙箱模式压根不用问（见下面注释） */
+        env: AgentEnv? = null,
+        /** 已经过围栏解析的真实落点（下载用），没解析就是空串 */
+        targetPath: String = "",
+    ): Hit? = when (tool) {
         AgentTools.SHELL -> {
             val cmd = args.optString("command", "")
             // 先看是不是危险命令（rm / dd / mkfs 这些）；
@@ -309,6 +316,19 @@ object DangerGuard {
             check(cmd) ?: checkCommandTargets(cmd)
         }
         AgentTools.WRITE -> checkWrite(args.optString("path", ""))
+
+        // 下载也是往盘上写东西，所以照"写文件"同一套判。
+        // ⚠️ 只在**本机（root）**环境才问：沙箱模式下围栏已经保证落点就在 app 自己的
+        // data 目录里，那是 Agent 该有的地盘，每次都弹就成了「下个东西都要申请」——
+        // 这条前人踩过（用户原话：吵得没法用）。
+        AgentTools.DOWNLOAD ->
+            if (env == AgentEnv.Host) {
+                val p = if (targetPath.isNotBlank()) targetPath else args.optString("path", "")
+                checkWrite(p)
+            } else {
+                null
+            }
+
         else -> null
     }
 

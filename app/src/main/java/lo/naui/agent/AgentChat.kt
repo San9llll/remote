@@ -225,6 +225,8 @@ object AgentChat {
                             Progress.parse(line)?.let { AgentTaskStore.updateToolProgress(conversationId, it) }
                             Progress.speed(line)?.let { AgentTaskStore.updateToolSpeed(conversationId, it) }
                         },
+                        // 后台下载的进度要报回**这个会话**那一份上（Store 是按会话分开的）
+                        conversationId = conversationId,
                     )
 
                     // ---- 要 root？弹窗问 ----
@@ -362,6 +364,9 @@ object AgentChat {
                 AgentTools.FIND -> "正在找文件"
                 AgentTools.GREP -> "正在搜内容"
                 AgentTools.BATCH -> "正在批量执行"
+                // 下载这两条都是"秒回"的，别写成"正在下载…"骗人以为在等
+                AgentTools.DOWNLOAD -> "正在起后台下载"
+                AgentTools.DOWNLOAD_CHECK -> "正在看下载进度"
                 else -> "正在干活"
             }
         }
@@ -389,6 +394,8 @@ object AgentChat {
         AgentTools.WRITE -> "写文件"
         AgentTools.LIST -> "看目录"
         AgentTools.DEVICE -> "看设备信息"
+        AgentTools.DOWNLOAD -> "后台下载"
+        AgentTools.DOWNLOAD_CHECK -> "问下载进度"
         else -> name
     }
 

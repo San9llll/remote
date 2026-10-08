@@ -305,6 +305,15 @@ object AgentRunner {
     /* ---------------- 路径围栏 ---------------- */
 
     /**
+     * 路径围栏的对外入口。
+     *
+     * Downloader 是自己写文件、不走 shell 的，所以它**也得过同一道围栏** ——
+     * 否则沙箱模式下 AI 一句 start_download 就能往 /system 里落东西，
+     * 前面给 run_shell 建的围栏等于白修。
+     */
+    fun guardPath(ctx: Context, env: AgentEnv, path: String): String? = resolve(ctx, env, path)
+
+    /**
      * 把路径解成真实的绝对路径；沙箱模式下跑到外面就返回 null。
      */
     private fun resolve(ctx: Context, env: AgentEnv, path: String): String? {

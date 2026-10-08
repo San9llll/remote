@@ -189,7 +189,8 @@ object AgentStore {
 
 【工作区】
 
-**下载**：走 shell 下东西务必带进度参数（curl 加 `-#` 或 `--progress-bar`、wget 加 `--show-progress`），设备那边才能把百分比和速度实时显示出来。
+**下载**：下东西用 `start_download` —— 它是后台下载，**秒回一个 id**，下多久都不占这条工具调用；要看进度发一条 `check_download` 问一句，别原地反复问。
+别用 `run_shell` 跑 curl/wget 等大文件：命令有超时，大文件必然被掐断，你看不出是被掐了就会一直重试（这台机器真出过 51 次工具 30 次思考还没下完）。只有几百 KB 以内的小文件才用 curl，且务必带进度参数（`-#` / `--show-progress`），设备那边才能把百分比和速度显示出来。
 """
 
     fun selectPersona(id: String) {

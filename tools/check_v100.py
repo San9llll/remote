@@ -215,7 +215,23 @@ def main():
     ).read().strip()
     need(not leftovers, "还有文件引用已删掉的东西：" + leftovers.replace("\n", ", "))
 
-    # ---------- ⑧ 括号平衡（所有改过的文件）----------
+    # ---------- ⑧ 跨文件顶层函数：用了就必须 import ----------
+    #
+    # CI 第一次红就是这条：HomeSceneDecor 是新加的顶层 @Composable，
+    # AppShell 里直接用了却没 import（坑 #3/#14 那一类，编译期 Unresolved reference）。
+    # selfcheck 只查它自己那张固定组件表，新加的名字它不认识。
+    NEED_IMPORT = {
+        "HomeSceneDecor": "import lo.naui.ui.home.HomeSceneDecor",
+        "HomeSceneBackdrop": "import lo.naui.ui.home.HomeSceneBackdrop",
+    }
+    for fname, src in (("shell", shell),):
+        raw = read(fname)
+        for sym, imp in NEED_IMPORT.items():
+            if re.search(r"\b" + sym + r"\s*\(", src) and imp not in raw:
+                errs.append("%s 用了 %s 但没 import（编译期就是 Unresolved reference）"
+                            % (fname, sym))
+
+    # ---------- ⑨ 括号平衡（所有改过的文件）----------
     for k in F:
         need(balance(code[k]), k + " 括号不平衡")
 

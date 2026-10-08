@@ -64,6 +64,7 @@ import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import lo.naui.sys.Shortcuts
 import lo.naui.sys.VolumeChordBus
 import lo.naui.ui.home.HomeSceneBackdrop
+import lo.naui.ui.home.HomeSceneDecor
 import lo.naui.ui.home.HomeSceneRail
 import lo.naui.ui.home.HomeScreen
 import lo.naui.ui.nav.Dest

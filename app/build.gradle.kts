@@ -1,0 +1,109 @@
+plugins {
+    alias(libs.plugins.agp.app)
+    alias(libs.plugins.kotlin.compose)
+}
+
+android {
+    namespace = "lo.naui"
+    compileSdk = 37
+
+    // 终端要真 PTY，只能靠 native 里的 forkpty
+
+    defaultConfig {
+        applicationId = "lo.naui"
+        minSdk = 26
+        // 故意留在 28：Android 10 起，targetSdk>=29 的 app 禁止 exec 自己的数据目录，
+        // 那 termux 的二进制（全在 $PREFIX/bin 下）就一个都跑不起来。
+        // termux 官方也是这么绕的，代价是上不了 Play。
+        targetSdk = 28
+
+        // 版本号规则（从 1.00.0 起）：versionName 是 "1.XX.0"，versionCode 就是 100 + XX。
+        //   1.00.0 → 100    1.01.0 → 101    1.02.0 → 102 ……
+        // tag 打成 v1.XX（UpdateChecker.isNewer 按 "." 逐段比数字，
+        // "1.01" 和 "1.01.0" 比出来是相等，不会误报有新版）。
+        versionCode =111
+        versionName = "1.11.0"
+
+        // 只打 arm64-v8a。
+        // 一来机器就是 arm64，多带别的 ABI 纯属白占体积；
+        // 二来 Android 15+ 对 native 库有 16KB page size 要求，
+        // 混进旧的其它 ABI 库最容易在启动时炸在这儿。
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
+    }
+
+    buildTypes {
+        debug {
+            // 带日志的那版，包名多一层，可以和正式版装在同一台手机上
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+            buildConfigField("boolean", "VERBOSE_LOG", "true")
+            resValue("string", "app_name", "Nakour·调试")
+        }
+        release {
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("debug")
+            // 正式版不带日志
+            buildConfigField("boolean", "VERBOSE_LOG", "false")
+            resValue("string", "app_name", "Nakour")
+        }
+    }
+
+    // targetSdk 故意留在 28（绕开 Android 10+ 的 exec 限制），
+    // 但 lint 会拿"上架 Google Play 要 33"来卡我们 —— 自己用的，关掉这条。
+    packaging {
+ // jniLibs里的 .so是本机 clang编好的，别再让 AGP拿 NDK的
+ // llvm-strip去处理（那是 x86_64的，在这台机器上跑不了）
+ jniLibs { keepDebugSymbols += "**/*.so" }
+ }
+
+ lint {
+        disable += "ExpiredTargetSdkVersion"
+        abortOnError = false
+        checkReleaseBuilds = false
+    }
+
+    buildFeatures {
+        compose = true
+        buildConfig = true
+        // resValue（按构建类型给应用名）要显式打开
+        resValues = true
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
+    }
+}
+
+dependencies {
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.appcompat)
+    implementation(libs.androidx.activity.compose)
+
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.compose.ui)
+    implementation(libs.androidx.compose.ui.graphics)
+    implementation(libs.androidx.compose.ui.tooling.preview)
+    debugImplementation(libs.androidx.compose.ui.tooling)
+
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+
+    implementation(libs.miuix.ui)
+    implementation(libs.miuix.icons)
+    implementation(libs.miuix.preference)
+    implementation(libs.backdrop)
+    // 7z 支持（用户批准加的）：commons-compress 读 7z 容器，
+    // tukaani-xz 提供里面的 LZMA/LZMA2 解码 —— 少一个就只能解 zip。
+    implementation(libs.commons.compress)
+    implementation(libs.tukaani.xz)
+    // Shizuku：给没 root、但有 adb 的人用（识别 + 之后拿系统能力）
+    implementation(libs.shizuku.api)
+    implementation(libs.shizuku.provider)
+    implementation(libs.capsule)
+
+    implementation(libs.kotlinx.coroutines.android)
+}

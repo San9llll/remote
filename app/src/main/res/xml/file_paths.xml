@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- 冷更新的 APK 存在 files/update/ 下 -->
+    <files-path name="files" path="." />
+    <cache-path name="cache" path="." />
+</paths>

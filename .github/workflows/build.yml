@@ -1,0 +1,182 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+    # 允许从 App 里触发构建（内置编译那个功能）。
+    # 传个 tag 名就会顺便打个包发 Release。
+    inputs:
+      tag:
+        description: '打个什么 tag（留空就只构建不出 Release）'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  # ============================================================
+  # 快速检查：只编 Kotlin（不打包、不 dex）
+  #
+  # 为什么单独拎出来：完整构建要跑 AAPT2 / D8 / 打包签名，三分钟起步；
+  # 而绝大多数红都是 Kotlin 编译错 —— 这一步通常 40~60 秒就有结果。
+  # 下面 build 依赖它，编不过就不往打包那步走了。
+  # ============================================================
+  quickcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Gradle 9.7.0
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.7.0'
+
+      - name: 装 NDK（终端要 forkpty）
+        run: |
+          SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          echo "SDK=$SDK"
+          # ---- 挑一个能用的 NDK ----
+          #
+          # ⚠️ 这门有个坑：GitHub 镜像里预装的某些 NDK **目录在、但缺
+          # source.properties**（是个空壳）。而 sdkmanager 看到目录已存在就
+          # 跳过不修，于是 Gradle 配置阶段报
+          #   [CXX1101] NDK at ... did not have a source.properties file
+          #
+          # 而且镜像里的版本号会变 —— 写死某一个迟早失效（就发生过：
+          # 27.0.12077973 是坏的，旁边 27.3.13750724 却是好的）。
+          #
+          # 所以不写死：**扫一遍 $SDK/ndk，挑第一个真的有 source.properties 的**。
+          SM=$(ls "$SDK"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1)
+          echo "sdkmanager=$SM"
+
+          NDK_DIR=""
+          for d in "$SDK"/ndk/*/; do
+            if [ -f "$d/source.properties" ]; then
+              NDK_DIR="${d%/}"
+              break
+            fi
+          done
+
+          if [ -z "$NDK_DIR" ]; then
+            echo "镜像里没一个能用的，自己装一个"
+            if [ -n "$SM" ]; then
+              yes | "$SM" --licenses > /dev/null 2>&1 || true
+              "$SM" --install "ndk;27.3.13750724" > /dev/null 2>&1 || echo "sdkmanager 装 NDK 没成功"
+            fi
+            NDK_DIR="$SDK/ndk/27.3.13750724"
+          fi
+
+          if [ -f "$NDK_DIR/source.properties" ]; then
+            echo "✅ NDK 就绪：$NDK_DIR"
+          else
+            echo "::error::NDK 还是不可用，看看镜像里都有啥："
+            ls "$SDK/ndk" 2>/dev/null || true
+            exit 1
+          fi
+
+      - name: Kotlin 编译检查（快速）
+        run: gradle compileReleaseKotlin --no-daemon
+
+  build:
+    needs: quickcheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Gradle 9.7.0
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.7.0'
+
+      - name: 装 NDK（终端要 forkpty）
+        run: |
+          SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          echo "SDK=$SDK"
+          # ---- 挑一个能用的 NDK ----
+          #
+          # ⚠️ 这门有个坑：GitHub 镜像里预装的某些 NDK **目录在、但缺
+          # source.properties**（是个残废的空壳）。而 sdkmanager 看到目录已存在
+          # 就跳过不修，于是 Gradle 配置阶段直接炸。
+          #
+          # 而且镜像里的版本号会变（写死某一个迟早失效 —— 就发生过：
+          # 27.0.12077973 是坏的，旁边 27.3.13750724 却是好的）。
+          #
+          # 所以不写死了：**扫一遍 $SDK/ndk，挑第一个真的有 source.properties 的**。
+          # 都没有才去装。
+          SM=$(ls "$SDK"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1)
+          echo "sdkmanager=$SM"
+
+          NDK_DIR=""
+          for d in "$SDK"/ndk/*/; do
+            if [ -f "$d/source.properties" ]; then
+              NDK_DIR="${d%/}"
+              break
+            fi
+          done
+
+          if [ -z "$NDK_DIR" ]; then
+            echo "没找到一个可用的 NDK，装一个"
+            if [ -n "$SM" ]; then
+              yes | "$SM" --licenses > /dev/null 2>&1 || true
+              "$SM" --install "ndk;27.3.13750724" > /dev/null 2>&1 || echo "sdkmanager 装 NDK 没成功"
+            fi
+            NDK_DIR="$SDK/ndk/27.3.13750724"
+          fi
+
+          echo "用的 NDK：$NDK_DIR"
+          if [ ! -f "$NDK_DIR/source.properties" ]; then
+            echo "::error::NDK 还是不可用"
+            ls "$SDK/ndk" 2>/dev/null || true
+            exit 1
+          fi
+          # 把挑中的版本号写到 gradle 能读到的地方
+          echo "ndk.dir=$NDK_DIR" >> local.properties
+
+      # 只出 release 版（带日志的 debug 版不再推送）
+      - name: Build release APK
+        run: gradle assembleRelease --no-daemon --stacktrace
+
+      - name: Collect APK
+        run: |
+          mkdir -p out
+          VERSION=$(grep -m1 'versionName = ' app/build.gradle.kts | sed 's/.*"\(.*\)".*/\1/')
+          echo "版本号: $VERSION"
+          cp app/build/outputs/apk/release/*.apk "out/nakour-${VERSION}.apk"
+          ls -la out
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nakour-apk
+          path: out/*.apk
+          if-no-files-found: error
+
+      # 出 Release 的两种情形：
+      #   ① 推了 v* 的 tag（平时手动发版）
+      #   ② 从 App 里用 workflow_dispatch 触发，并且填了 tag
+      # —— ② 就是"内置编译"那条路
+      - name: Publish Release
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          files: out/*.apk
+          name: Nakour ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}  (${{ github.sha }})
+          generate_release_notes: true

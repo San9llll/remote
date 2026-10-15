@@ -1,0 +1,6 @@
+func(): 
+ val a =0.5f
+ for (i in0 until n) { }
+ cmd2>&1 | head
+ regex "\s+0" and "\}"
+4 spaces above

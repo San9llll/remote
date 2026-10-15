@@ -57,6 +57,7 @@ data class RiskDecision(
     val reason: String = "",
     val note: String = "",
     val consequence: String = "",
+    val egg: Boolean = false,
     val run: suspend () -> ToolResult,
 ) {
     /** 弹窗标题：root 类和删除类各说各的话，别混成一句"危险请求" */

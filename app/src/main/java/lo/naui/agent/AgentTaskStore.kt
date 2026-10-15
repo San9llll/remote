@@ -38,6 +38,8 @@ object AgentTaskStore {
         val reasoning: String = "",
         /** 结构化的工具记录（带耗时），界面用 */
         val steps: List<ToolStep> = emptyList(),
+        /**按发生顺序排好的块（界面照它画卡片） */
+        val timeline: List<CardEvent> = emptyList(),
     )
 
     data class State(
@@ -67,6 +69,40 @@ object AgentTaskStore {
     /** 跑完的结果，按会话堆着 */
     private var results by mutableStateOf<Map<String, Result>>(emptyMap())
 
+	/* ----------------插话队列 ---------------- */
+
+	/**
+	 *用户"插话"排队的地方。
+	 *
+	 *用户的要求：任务跑着的时候往输入栏打字、按发送，**不打断正在跑的那一轮**。
+	 *话排进这个队列，AgentChat会在"轮与轮之间的缝"里把它接成一条新的 user消息 ——
+	 *于是模型是在**新一轮**里看见你的话，原来那轮跑完的工具结果一个字不丢。
+	 *
+	 *为什么不直接 cancel重开：一 cancel，正在流式吐的正文和这一轮的工具结果全断，
+	 *模型下一句就只能瞎猜。
+	 */
+	private var inbox by mutableStateOf<Map<String, List<String>>>(emptyMap())
+
+	/**还排着几句（界面拿它说一声，不然按完没反应会以为丢了） */
+	fun saidCount(convId: String?): Int =
+		if (convId.isNullOrBlank())0 else inbox[convId]?.size ?:0
+
+	fun interject(convId: String, text: String) {
+		if (convId.isBlank() || text.isBlank()) return
+		inbox = inbox + (convId to ((inbox[convId] ?: emptyList()) + text))
+	}
+
+	/**取最早的一句；没有就 null */
+	fun takeSaid(convId: String): String? {
+		val q = inbox[convId] ?: return null
+		if (q.isEmpty()) return null
+		val head = q.first()
+		val rest = q.drop(1)
+		inbox = if (rest.isEmpty()) inbox - convId else inbox + (convId to rest)
+		return head
+	}
+
+
     /* ---------- 流式的中间内容，也是按会话分 ---------- */
 
     private var streams by mutableStateOf<Map<String, Stream>>(emptyMap())
@@ -79,8 +115,11 @@ object AgentTaskStore {
         /** 现在在跑哪个工具 */
         val tool: String = "",
         val toolHint: String = "",
+        val toolDir: String = "",
         val progress: Float = -1f,
         val speed: String = "",
+        /**按发生顺序排好的块（界面照它画卡片） */
+        val events: List<CardEvent> = emptyList(),
     ) {
         companion object {
             val EMPTY = Stream()
@@ -104,6 +143,7 @@ object AgentTaskStore {
         val now = System.currentTimeMillis()
         states = states + (convId to State(true, convId, "在想…", now, 0L))
         streams = streams + (convId to Stream.EMPTY)
+		inbox = inbox - convId
         results = results - convId
     }
 
@@ -172,10 +212,10 @@ object AgentTaskStore {
         streams = streams + (convId to cur.copy(steps = cur.steps + line))
     }
 
-    fun updateRunningTool(convId: String, label: String, hint: String) {
+    fun updateRunningTool(convId: String, label: String, hint: String, dir: String = "") {
         val cur = streamOf(convId)
         streams = streams + (convId to cur.copy(
-            tool = label, toolHint = hint, progress = -1f, speed = ""
+            tool = label, toolHint = hint, toolDir = dir, progress = -1f, speed = ""
         ))
     }
 
@@ -190,8 +230,19 @@ object AgentTaskStore {
     }
 
     /** 清掉某个会话的流式中间态（跑完了调） */
+    fun setEvents(convId: String, list: List<CardEvent>) {
+    val cur = streamOf(convId)
+    streams = streams + (convId to cur.copy(events = list.toList()))
+    }
+
+    fun addEvent(convId: String, e: CardEvent) {
+    val cur = streamOf(convId)
+    streams = streams + (convId to cur.copy(events = cur.events + e))
+    }
+
     fun clearStream(convId: String) {
         streams = streams - convId
+		inbox = inbox - convId
     }
 
     /** 会话被删掉时清干净 */

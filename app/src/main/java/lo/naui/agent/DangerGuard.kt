@@ -202,7 +202,30 @@ object DangerGuard {
      * 用户的要求：**在这两个之外动任何文件都要问** ——
      * 因为 sdcard 里是他自己的照片文档，出事了看得见；系统目录出事了直接开不了机。
      */
-    private val USER_AREAS = listOf(
+    
+	/* ----------------彩蛋 ----------------
+	 *
+	 *用户要的效果：最险的那几条（删根、写块设备、格式化、remount /system、刷机）
+	 *弹窗照弹、长得一模一样，但点「允许」**什么都不会执行** ——它是彩蛋，不是真闸门。
+	 *
+	 *名单刻意写得窄，只认这几种写法。不敢复用 CATEGORIES那九类 ——
+	 *那里面 rm -rf连 rm -rf /data/local/tmp/xxx都算，
+	 *整类划进彩蛋，正常的清理活就变成"点了没反应"，那才是真 bug。
+	 */
+	fun isEgg(command: String): Boolean {
+		if (command.isBlank()) return false
+		val c = command.replace(Regex("\\s+"), " ").trim().lowercase()
+		if (c.isEmpty()) return false
+		if (c.startsWith("rm ") && Regex("-[a-z]*[rf]").containsMatchIn(c) &&
+			(c.endsWith(" /") || c.endsWith(" /*") || c.endsWith("/*") || c.endsWith("/"))) return true
+		if (c.contains("dd ") && c.contains("of=/dev/block")) return true
+		if (Regex("\\bmkfs").containsMatchIn(c)) return true
+		if (c.contains("remount") && c.contains("/system")) return true
+		if (c.contains("fastboot flash") || c.contains("fastboot erase")) return true
+		return false
+	}
+
+	private val USER_AREAS = listOf(
         "/storage/emulated/0",
         "/sdcard",
         "/storage/self/primary",
@@ -277,7 +300,45 @@ object DangerGuard {
 
     private val ABS_PATH = Regex("(/[A-Za-z0-9_./\\-]+)")
 
-    fun checkCommandTargets(command: String): Hit? {
+    /**
+ *这条命令是不是**只在自己地盘里**转悠。
+ *
+ *用户1.03.0的要求："Agent执行工作区的命令时不需要安全弹窗"。
+ *
+ *判据：把命令里出现的**所有绝对路径**都抠出来（URL先剔掉，不然下载命令
+ *里的网址会被当成本地路径），每一个都落在【工作区】或 Agent的沙箱目录里，
+ *才算"在自己地盘"。
+ *
+ * ⚠️前提是危险的**模式**那道闸门（check）先过了。所以这是
+ * "在自己地盘里不用每次问"，**不是**"自己地盘里可以 rm -rf /"。
+ */
+ fun inOwnArea(command: String, sandboxRoot: String? = null): Boolean {
+ if (command.isBlank()) return false
+ val cleaned = URL_RE.replace(command, " ")
+ val paths = ABS_PATH.findAll(cleaned).map { it.groupValues[1] }
+ .filter { it.length >3 }
+ .filterNot { p -> BENIGN_PREFIX.any { p.startsWith(it) } }
+ .toList()
+ //一条绝对路径都没有 =全在相对路径里转 =本来就在沙箱根下面，免问
+ if (paths.isEmpty()) return true
+
+ val areas = mutableListOf<String>()
+ val ws = AgentStore.workspace
+ if (ws.isNotBlank()) {
+ //工作区可能是 SAF的 content:// URI（那种压根不会出现在命令里，忽略），
+ //也可能填的普通路径 / file:// ——后两种才能拿去比前缀
+ when {
+ ws.startsWith("/") -> areas += ws
+ ws.startsWith("file://") -> areas += ws.removePrefix("file://")
+ }
+ }
+ if (!sandboxRoot.isNullOrBlank()) areas += sandboxRoot
+ if (areas.isEmpty()) return false
+
+ return paths.all { p -> areas.any { a -> p.lowercase().startsWith(a.lowercase()) } }
+ }
+
+ fun checkCommandTargets(command: String): Hit? {
         if (command.isBlank()) return null
         val c = command.lowercase()
 
@@ -310,12 +371,31 @@ object DangerGuard {
         targetPath: String = "",
     ): Hit? = when (tool) {
         AgentTools.SHELL -> {
-            val cmd = args.optString("command", "")
-            // 先看是不是危险命令（rm / dd / mkfs 这些）；
-            // 不是的话再看"它要改哪儿" —— 改到 sdcard 外头一样要问
-            check(cmd) ?: checkCommandTargets(cmd)
-        }
-        AgentTools.WRITE -> checkWrite(args.optString("path", ""))
+			val cmd = args.optString("command", "")
+			//危险的**模式**那道闸门永远在（rm -rf / dd / mkfs这些）。
+			//过了之后再看「它要改哪儿」——但自己地盘里就不问了。
+			check(cmd) ?: run {
+				// ----1.03.0：自己地盘里不问 ----
+				//
+				//以前只要命令里出现一条 sdcard之外的绝对路径就弹窗，于是 Agent
+				// **在沙箱里**干活（路径全是 /data/user/0/lo.naui/…）也每步弹一次。
+				//用户原话：「Agent执行工作区的命令时不需要安全弹窗」。
+				//
+				//三条免问：
+				// ·沙箱环境整段免 ——围栏已经保证它出不去，跟下载那条先例一致；
+				// ·本机环境，但命令里的绝对路径**全都在** Agent设置里划的工作区；
+				// ·本机环境，但全都在 app自己的 data目录里（沙箱就在它下面）。
+				if (env == AgentEnv.Sandbox) null
+				else if (inOwnArea(cmd)) null
+				else checkCommandTargets(cmd)
+			}
+		}
+        AgentTools.WRITE ->
+   //沙箱模式的写落点已经被围栏钉在 app自己的 data目录里了，那是 Agent
+   //该有的地盘；本机模式下只要落在【工作区】里也不问（1.03.0）。
+   //剩下的（改系统文件、写 sdcard之外）照旧要点头。
+   if (env == AgentEnv.Sandbox || inOwnArea(args.optString("path", ""))) null
+   else checkWrite(args.optString("path", ""))
 
         // 下载也是往盘上写东西，所以照"写文件"同一套判。
         // ⚠️ 只在**本机（root）**环境才问：沙箱模式下围栏已经保证落点就在 app 自己的

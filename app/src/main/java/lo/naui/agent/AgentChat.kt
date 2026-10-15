@@ -20,6 +20,8 @@ data class ToolStep(
 
 /** 一轮跑完的结果 */
 data class AgentRun(
+/**按发生顺序排好的块（界面照它画卡片） */
+val timeline: List<CardEvent> = emptyList(),
     val reply: String,
     /** 中间调了哪些工具 */
     val toolLog: List<String> = emptyList(),
@@ -75,7 +77,7 @@ object AgentChat {
             // 0 / 负数 = 不限；但真无限会跑飞，所以压一个 500 的硬顶
             val configured = AgentStore.maxToolRounds
             val maxRounds = if (configured <= 0) 500 else configured
-            val tools = AgentTools.toolsFor(env)
+            val tools = ToolPrefs.toolsFor(ctx, env, conversationId)
             // ---- 组历史 ----
             //
             // 照 astrbot 那套来的（`astrbot/core/agent/context/`）。三件事：
@@ -136,6 +138,8 @@ object AgentChat {
 
             val log = mutableListOf<String>()
             val steps = mutableListOf<ToolStep>()
+            /**按发生顺序排好的块；思考和正文的增量靠 pushEvents并到上一块 */
+            val events = mutableListOf<CardEvent>()
 
             /** 这个会话踩过的坑（可变记录本，copy 状态时共享同一个实例） */
             val lessons = AgentTaskStore.stateOf(conversationId).lessons
@@ -162,6 +166,18 @@ object AgentChat {
             var spent = 0L
 
             while (round++ < maxRounds) {
+
+				// ----插话：上一轮跑着的时候用户又说了话，在这儿接上 ----
+				//
+				//位置很讲究：这是"工具结果已经回填、下一次请求还没发"的缝。
+				//往 messages里塞一条 user消息，模型就是在**新一轮**里看见它 ——
+				//原来那一轮一字不损，也不用 cancel重来。
+				while (true) {
+					val said = AgentTaskStore.takeSaid(conversationId) ?: break
+					messages.put(JSONObject().put("role", "user").put("content", said))
+					onProgress("收到你的新话，接着说…")
+				}
+
                 // 新一轮 —— 这回是在跟模型说话，没在跑工具，把那条收掉
                 AgentTaskStore.updateRunningTool(conversationId, "", "")
                 onProgress(if (round == 1) "在想…" else "第 " + round + " 轮…")
@@ -217,8 +233,14 @@ object AgentChat {
                         onReasoning = { t ->
                             reasonAll.append(t)
                             onReasoning(t)
+                            pushEvents(events, CardEvent.THINK, t)
+                            AgentTaskStore.setEvents(conversationId, events)
                         },
-                        onDelta = { onDelta(it) },
+                        onDelta = { d ->
+                        onDelta(d)
+                        pushEvents(events, CardEvent.TEXT, d)
+                        AgentTaskStore.setEvents(conversationId, events)
+                        },
                     )
                     // "空"的定义：没正文 **且** 没工具调用
                     if (r.text.isNotBlank() || r.toolCalls.isNotEmpty()) {
@@ -237,6 +259,7 @@ object AgentChat {
                 val finalReply = reply ?: return@runCatching AgentRun(
                     reply = "连着三次都没收到内容。可能是服务商那边抽了，或者 Key / 模型不对 —— 你到设置里检查一下。",
                     toolLog = log,
+                                timeline = events.toList(),
                     steps = steps,
                     thinkRounds = round - 1,
                     usage = AgentApi.Usage(cached, input, output, spent),
@@ -250,10 +273,20 @@ object AgentChat {
                 onRound(round)
 
                 if (finalReply.toolCalls.isEmpty()) {
-                    AgentTaskStore.updateRunningTool(conversationId, "", "")
+					//收尾前再看一眼队列：用户可能正好在模型说最后一句的时候插了话，
+					//不捞这一下，那句就白打了。
+					val lateSaid = AgentTaskStore.takeSaid(conversationId)
+					if (lateSaid != null && finalReply.text.isNotBlank() && round < maxRounds) {
+						messages.put(JSONObject().put("role", "assistant").put("content", finalReply.text))
+						messages.put(JSONObject().put("role", "user").put("content", lateSaid))
+						onProgress("收到你的新话，接着说…")
+						continue
+					}
+					AgentTaskStore.updateRunningTool(conversationId, "", "")
                     return@runCatching AgentRun(
                         reply = finalReply.text.ifBlank { "（模型没说话）" },
                         toolLog = log,
+                                timeline = events.toList(),
                         steps = steps,
                         thinkRounds = round - 1,
                         usage = AgentApi.Usage(cached, input, output, spent),
@@ -269,7 +302,11 @@ object AgentChat {
                     onProgress("正在用 " + label)
 
                     // 告诉界面"现在在跑什么"，好让进度条转起来
-                    AgentTaskStore.updateRunningTool(conversationId, label, guessHint(call.name, call.args))
+                    AgentTaskStore.updateRunningTool(
+                    conversationId, label,
+                    guessHint(call.name, call.args),
+                    opDir(call.name, call.args),
+                    )
 
                     val t0 = System.currentTimeMillis()
                     var result = AgentTools.run(
@@ -341,6 +378,7 @@ object AgentChat {
                                     result.output.take(600) +
                                     "\n\n换个思路，或者你告诉我该怎么做。",
                                 toolLog = log,
+                                timeline = events.toList(),
                                 steps = steps,
                                 thinkRounds = round,
                                 usage = AgentApi.Usage(cached, input, output, spent),
@@ -363,6 +401,18 @@ object AgentChat {
                         outputChars = result.output.length,
                         millis = cost,
                     )
+                    val ev = CardEvent(
+                    kind = CardEvent.TOOL,
+                    label = toolLabel(call.name),
+                    brief = brief,
+                    detail = opDetail(call.name, call.args),
+                    dir = opDir(call.name, call.args),
+                    millis = cost,
+                    ok = result.ok,
+                    chars = result.output.length,
+                    )
+                    events += ev
+                    AgentTaskStore.addEvent(conversationId, ev)
 
                     messages.put(
                         AgentApi.toolMessage(
@@ -378,6 +428,7 @@ object AgentChat {
                 reply = "（工具已经调了 " + maxRounds + " 轮还没完，先停一下）\n" +
                     "想让它多跑的话，去聊天页那个 ⚙ 面板把「工具调用上限」设成不限。",
                 toolLog = log,
+                                timeline = events.toList(),
                 steps = steps,
                 thinkRounds = round,
                 usage = AgentApi.Usage(cached, input, output, spent),
@@ -416,6 +467,11 @@ object AgentChat {
                 AgentTools.CLIPBOARD -> "正在动剪贴板"
                 AgentTools.NOTICE -> "正在发通知"
                 AgentTools.SHOT -> "正在截屏"
+		AgentTools.BUILD -> AgentBuildOps.hintOf(toolName)
+				AgentTools.SEARCH -> "正在联网搜…"
+ AddonTools.LIST, AddonTools.NEW, AddonTools.RELOAD, AddonTools.WINDOW,
+				CustomTools.NEW, CustomTools.LIST, CustomTools.DEL ->
+ AddonTools.hintOf(toolName)
                 else -> "正在干活"
             }
         }
@@ -455,6 +511,15 @@ object AgentChat {
         AgentTools.CLIPBOARD -> "剪贴板"
         AgentTools.NOTICE -> "发通知"
         AgentTools.SHOT -> "截屏"
+		AgentTools.BUILD -> "编译托管"
+			AgentTools.SEARCH -> "联网搜索"
+			AddonTools.LIST -> "看本地功能"
+			AddonTools.NEW -> "新建本地功能"
+			AddonTools.RELOAD -> "刷新功能页"
+			AddonTools.WINDOW -> "开关悬浮窗"
+			CustomTools.NEW -> "写新工具"
+			CustomTools.LIST -> "看自己写的工具"
+			CustomTools.DEL -> "删自定义工具"
         else -> name
     }
 

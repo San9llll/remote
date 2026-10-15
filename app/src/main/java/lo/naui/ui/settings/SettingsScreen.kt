@@ -86,7 +86,9 @@ fun SettingsScreen(
             }
 
             item(key = "keepalive") {
-                SectionTitle("后台")
+                //1.03.0：电池优化那几项（后台留存 /开机自启 /白名单）
+ //归到一块儿，标题就写「电池优化」，用户一眼知道这几个是干同一件事的
+ SectionTitle("电池优化")
                 SettingsCard(index = 1) {
                     IndicatorSwitchPreference(
                         checked = lo.naui.agent.AgentTaskStore.keepAlive,

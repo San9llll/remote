@@ -20,6 +20,7 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -35,6 +36,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import top.yukonga.miuix.kmp.basic.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -56,7 +60,9 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.drawPlainBackdrop
@@ -94,7 +100,7 @@ private val NAV_DESTS = listOf(Dest.Home, Dest.Modules, Dest.Overview, Dest.Sett
 
 private enum class Sub {
         None, Theme, About, Files, Terminal, AgentConfig, AgentSessions,
-        Shelf, NewBook, Reader, BookConfig, Personas,
+        Shelf, NewBook, Reader, BookConfig, Personas, Addon,
     }
 
 /**
@@ -111,6 +117,8 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
     var sub by remember { mutableStateOf(Sub.None) }
     // 书柜里当前翻开的是哪本
     var bookId by remember { mutableStateOf("") }
+ //本地功能页当前打开的是哪一个（Agent自己写的那些）
+ var addonId by remember { mutableStateOf("") }
 
     // 方案 B 的扩散圆心（0~1 归一化），是**点下去那一下的真实坐标**
     var spreadOrigin by remember { mutableStateOf(androidx.compose.ui.geometry.Offset(0.5f, 0.5f)) }
@@ -212,7 +220,21 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
             } else {
                 // 在首页换图：排进涟漪队列，由涟漪把它推出来。
                 // 底层这张**先不动** —— 动了就等于跳过动画直接换图。
-                lo.naui.ui.theme.BgRipples.fire(img)
+                if (lo.naui.ui.theme.BgRipples.takePlain()) {
+ // ----上滑刷新：虚化切图 ----
+ //
+ //1.03.0用户的要求：主页上滑刷新 =背景**直接淡过去**，
+ //只有"主题页点按钮换样式"才走涟漪扩散那套。
+ //所以这条不排涟漪，直接扶正 ——下面 AppBackdropImages那层
+ // Crossfade会把新旧两张图淡换掉。
+ lo.naui.ui.theme.BgRipples.clear()
+ shownWallpaper = img
+ wallpaper = img
+ } else {
+ //主题页点按钮换样式：排进涟漪队列，由涟漪把它推出来。
+ //底层这张**先不动** ——动了就等于跳过动画直接换图。
+ lo.naui.ui.theme.BgRipples.fire(img)
+ }
             }
         } else {
             shownWallpaper = null
@@ -329,11 +351,13 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
                     backdrop = backdrop,
                 )
                 Dest.Modules -> ToolsScreen(
-                    onOpenFiles = { sub = Sub.Files },
-                    onOpenTerminal = { sub = Sub.Terminal },
-                    onOpenShelf = { sub = Sub.Shelf },
-                    backdrop = backdrop,
-                )
+					onOpenFiles = { sub = Sub.Files },
+					onOpenTerminal = { sub = Sub.Terminal },
+					onOpenShelf = { sub = Sub.Shelf },
+					//1.03.0：Agent自己写的那些「本地功能」也从功能页进
+					onOpenAddon = { id -> addonId = id; sub = Sub.Addon },
+					backdrop = backdrop,
+				)
                 Dest.Overview -> AgentScreen(
                     onOpenConfig = { sub = Sub.AgentConfig },
                     onOpenSessions = { sub = Sub.AgentSessions },
@@ -354,6 +378,21 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
             )
             Sub.Personas -> lo.naui.ui.agent.PersonasScreen(onBack = { sub = Sub.AgentConfig })
             Sub.AgentSessions -> AgentSessionsScreen(onBack = { sub = Sub.None })
+
+ //本地功能：Agent写出来的那些页面，用同一套渲染器画
+ Sub.Addon -> {
+ val a = lo.naui.ui.addon.AddonStore.byId(addonId)
+ if (a == null) {
+ //功能被删了 / id对不上 ——别白屏，给个能退回去的页
+ AddonMissingPage(onBack = { addonId = ""; sub = Sub.None })
+ } else {
+ lo.naui.ui.addon.AddonScreen(
+ addon = a,
+ onBack = { sub = Sub.None },
+ backdrop = backdrop,
+ )
+ }
+ }
 
             Sub.Shelf -> lo.naui.ui.book.ShelfScreen(
                 onOpenBook = { id -> bookId = id; sub = Sub.Reader },
@@ -457,7 +496,7 @@ fun AppShell(prefs: ThemePrefs, backdrop: com.kyant.backdrop.backdrops.LayerBack
             // ⚠️ 这里原来包着一段"涟漪期间把 backdrop 置成 null"的 hack，**已删**。
             //
             // 它的理由是「layerBackdrop 里写着 shouldAutoInvalidate = false，
-            // 不会每帧重录」。但那是旧版本的源码 —— 本项目用的 backdrop 是 **2.0.1**，
+            // 不会每帧重录」。但那是旧版本的源码 —— 本项目用的 backdrop 是 ** 2.0.1**，
             // 我把 LayerBackdropModifier.kt 拉下来核对过：那个字段**根本不存在**，
             // 节点走默认值，draw() 里就是 drawContent() + recordLayer(...)，
             // 子树一重绘它就重录。所以这个 hack 不但没必要，还带来一个真 bug：
@@ -662,7 +701,16 @@ private fun AppBackdropImages(
 ) {
     Box(Modifier.fillMaxSize()) {
         if (panorama) {
-            HomeSceneBackdrop(wallpaper = wallpaper)
+            androidx.compose.animation.Crossfade(
+ //换图时淡入淡出 ——这就是用户要的"虚化切图"。
+ //
+ //放在这一层做：下面所有页（导轨、卡片、涟漪）都从这儿取背景，
+ //只换这一处，全屏背景就只有一份，不存在"哪一页没跟上"。
+ //涟漪那条路不受影响 ——涟漪画在它上面，圆推到哪儿哪儿是新图。
+ targetState = wallpaper,
+ animationSpec = androidx.compose.animation.core.tween(420),
+ label = "shell_wall",
+ ) { w -> HomeSceneBackdrop(wallpaper = w) }
         } else {
             Box(Modifier.fillMaxSize().background(MiuixTheme.colorScheme.surface))
         }
@@ -858,3 +906,34 @@ private fun RippleRing(frame: androidx.compose.runtime.MutableIntState) {
     }
 }
 
+/**
+ *本地功能没找到时的兜底页。
+ *
+ *什么时候会走到这儿：用户把 addons/下面那个目录删了、或者 Agent写歪了 id。
+ *别白屏 ——给一句人话 +一个能退回去的按钮。
+ */
+@Composable
+private fun AddonMissingPage(onBack: () -> Unit) {
+	Column(
+		Modifier
+			.fillMaxSize()
+			.padding(24.dp),
+	) {
+		Spacer(Modifier.height(40.dp))
+		Text("这个本地功能不在了", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+		Spacer(Modifier.height(8.dp))
+		Text(
+			"addons/下面那个目录可能被删了，或者名字对不上。" +
+				"回功能页刷新一下看看，也可以让 Agent重新写一个。",
+			fontSize = 12.5.sp,
+			color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+		)
+		Spacer(Modifier.height(18.dp))
+		Text(
+			"←回功能页",
+			fontSize = 13.sp,
+			color = MiuixTheme.colorScheme.primary,
+			modifier = Modifier.clickable { onBack() },
+		)
+	}
+}

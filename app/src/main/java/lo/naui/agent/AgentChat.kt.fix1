@@ -1,0 +1,502 @@
+package lo.naui.agent
+
+import android.content.Context
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
+
+/** 一次工具调用干了什么（给界面展示，**不外露命令原文**） */
+data class ToolStep(
+    val name: String,
+    /** 人话名字：执行命令 / 读文件 … */
+    val label: String,
+    val brief: String,
+    val ok: Boolean,
+    val outputChars: Int,
+    /** 花在这件事上的时间 */
+    val millis: Long,
+)
+
+/** 一轮跑完的结果 */
+data class AgentRun(
+/**按发生顺序排好的块（界面照它画卡片） */
+val timeline: List<CardEvent> = emptyList(),
+    val reply: String,
+    /** 中间调了哪些工具 */
+    val toolLog: List<String> = emptyList(),
+    /** 结构化的工具记录（带耗时，界面用） */
+    val steps: List<ToolStep> = emptyList(),
+    /** 这一轮里模型想了几次（就是发了几次请求） */
+    val thinkRounds: Int = 0,
+    /** 这一轮总共的用量（多轮请求累加） */
+    val usage: AgentApi.Usage = AgentApi.Usage(),
+    /** 思考内容（R1 / o1 这类才有） */
+    val reasoning: String = "",
+)
+
+/**
+ * 带工具的对话。
+ *
+ * 流程跟 astrbot 那边一样：把工具定义一起发过去，
+ * 模型说"我要调 xxx" → 我们执行 → 结果塞回去 → 再问一遍，
+ * 直到它不再调工具、只说话为止。
+ *
+ * **走流式**：正文和思考内容都是边生成边吐给界面的，
+ * 不用等整段回来才显示。轮数上限由用户配（默认 8）。
+ */
+object AgentChat {
+
+    /**
+     * 一次最多带多少条历史。
+     *
+     * 太多了反而糟 —— 上下文一满，模型抓不住当前在聊什么。
+     * 30 条大约是十来轮对话，够用了。
+     */
+    private const val MAX_HISTORY = 30
+
+    suspend fun run(
+        ctx: Context,
+        /** 哪个会话 —— Store 里所有东西都按它分开放 */
+        conversationId: String,
+        system: String,
+        history: List<ChatMessage>,
+        env: AgentEnv,
+        maxTokens: Int,
+        temperature: Float,
+        onProgress: (String) -> Unit,
+        /** 思考内容的增量 */
+        onReasoning: (String) -> Unit = {},
+        /** 正文的增量 */
+        onDelta: (String) -> Unit = {},
+        /** 每转完一轮通知一声（界面拿它更新"思考了 N 次"） */
+        onRound: (Int) -> Unit = {},
+        // askUser 这个参数没了：要问用户就带回 RiskDecision，由上面那条通道统一处理
+    ): Result<AgentRun> = withContext(Dispatchers.IO) {
+        runCatching {
+            // 0 / 负数 = 不限；但真无限会跑飞，所以压一个 500 的硬顶
+            val configured = AgentStore.maxToolRounds
+            val maxRounds = if (configured <= 0) 500 else configured
+            val tools = ToolPrefs.toolsFor(ctx, env, conversationId)
+            // ---- 组历史 ----
+            //
+            // 照 astrbot 那套来的（`astrbot/core/agent/context/`）。三件事：
+            //
+            //   ① 空消息**直接跳过** —— 以前拿"（空）"占位，模型会把它当真的话来回
+            //   ② 带图的消息 content 用数组 [ {text}, {image_url} ]
+            //   ③ 组完之后过一遍 **AgentContext.truncateByHalving**，
+            //      它会裁掉一半 + 修 tool 配对（这个是 OpenAI 规范硬要求，
+            //      Gemini 尤其严格；我们以前完全没做，很可能就是
+            //      "模型理解有问题"的原因之一）
+            val raw = mutableListOf<JSONObject>()
+            history.forEach { m ->
+                if (m.text.isBlank() && m.images.isEmpty()) return@forEach
+
+                if (m.role == "user" && m.images.isNotEmpty()) {
+                    val parts = JSONArray()
+                    if (m.text.isNotBlank()) {
+                        parts.put(JSONObject().put("type", "text").put("text", m.text))
+                    }
+                    m.images.forEach { url ->
+                        parts.put(
+                            JSONObject()
+                                .put("type", "image_url")
+                                .put("image_url", JSONObject().put("url", url))
+                        )
+                    }
+                    raw += JSONObject().put("role", "user").put("content", parts)
+                } else {
+                    raw += JSONObject().put("role", m.role).put("content", m.text)
+                }
+            }
+            // ---- ① 召回 ----
+            //
+            // 以前是死板的"最后 30 条"：用户到第 40 轮提起第 5 轮说过的东西，
+            // 模型是**真的没看见**，只能回"你没提过"。
+            // 现在最近 14 条一定带，更早的按关键词从剩下的里捞几条回来。
+            val latestQuestion = history.lastOrNull { it.role == "user" }?.text.orEmpty()
+            val picked = AgentMemory.recall(raw, latestQuestion)
+
+            // ---- ② 裁剪 ----
+            var fixed = AgentContext.truncateByHalving(picked)
+
+            // ---- ③ 压缩（shouldCompress 终于有人调了）----
+            //
+            // ⚠️ 1.02.0 之前 AgentContext.shouldCompress / COMPRESS_THRESHOLD
+            // 是**死代码** —— 没有任何调用方，阈值怎么改都不影响行为。
+            // 现在接上了：超过 AgentStore.contextLimit 的 82%，
+            // 就把最老的若干轮并成一小段结构化摘要，挂在最前面。
+            // 丢的是字节，不是"这事儿发生过"。
+            val compacted = AgentMemory.compact(fixed, AgentStore.contextLimit)
+            val compressed = compacted.second.isNotEmpty()
+            // 摘掉一批之后 tool_calls / tool 的配对可能断了，必须再修一遍
+            // （OpenAI 规范硬要求，Gemini 尤其严格 —— 坑在 AgentContext 注释里写着）
+            fixed = AgentContext.fixMessages(compacted.first)
+
+            val messages = JSONArray()
+            fixed.forEach { messages.put(it) }
+
+            val log = mutableListOf<String>()
+            val steps = mutableListOf<ToolStep>()
+            /**按发生顺序排好的块；思考和正文的增量靠 pushEvents并到上一块 */
+            val events = mutableListOf<CardEvent>()
+
+            /** 这个会话踩过的坑（可变记录本，copy 状态时共享同一个实例） */
+            val lessons = AgentTaskStore.stateOf(conversationId).lessons
+
+            /**
+             * 同一个工具连着失败的次数。
+             *
+             * 为什么要盯它：实机反馈过"一次回答用了 200 多次思考" ——
+             * 其中一大块是模型**卡在同一个动作上反复撞**（命令报错、它换个写法再试、还错…）。
+             * astrbot 那边也有类似的"别让它钻牛角尖"的机制。
+             *
+             * 这里定：同一个工具**连着失败 3 次**就强制收手，把情况说给用户听。
+             *（1.00.0 从 4 改成 3：每一次失败都是一整轮请求 —— 组历史、发过去、
+             *  等首字、跑工具，用户干等着。第 4 次几乎从来没有"这次不一样"，
+             *  省下来那一轮比多试一次值钱。）
+             */
+            var lastFailedTool = ""
+            var consecutiveFail = 0
+            val reasonAll = StringBuilder()
+            var round = 0
+            var cached = 0
+            var input = 0
+            var output = 0
+            var spent = 0L
+
+            while (round++ < maxRounds) {
+                // 新一轮 —— 这回是在跟模型说话，没在跑工具，把那条收掉
+                AgentTaskStore.updateRunningTool(conversationId, "", "")
+                onProgress(if (round == 1) "在想…" else "第 " + round + " 轮…")
+
+                // ---- 空输出重试 ----
+                //
+                // 照 astrbot 那套：`EMPTY_OUTPUT_RETRY_ATTEMPTS = 3`，
+                // 退避 1~4 秒。
+                //
+                // 为什么要它：模型偶尔会返回一个**完全空**的响应
+                //（既没有正文、也没有工具调用）。这多半是服务端抽了一下，
+                // 重试一次通常就有了。不重试的话，用户会直接看到
+                // "（模型没说话）" —— 以为是坏了。
+                var reply: AgentApi.Reply? = null
+                var attempt = 0
+                while (attempt < 3) {
+                    // ---- 本轮的任务态：挂在**消息尾部**，不拼进 system ----
+                    //
+                    // 为什么要每轮重算：模型"反复做同一件事"多数不是笨，
+                    // 是它**看不见自己已经做过什么**。这块就是给它看的镜子。
+                    //
+                    // ⚠️ 为什么不能拼进 system（我上一版就是这么写的）：
+                    // system 在整个请求的**最前面**，它一变，后面整段历史
+                    // 就都不再命中服务商的前缀缓存 —— 等于每轮重新 prefill 一遍全部上下文。
+                    // 上一轮我刚拿"前缀缓存能吃掉提示词的膨胀"当理由把 TOOL_NOTE 放宽，
+                    // 转头就往 system 里塞每轮变化的东西，那是自己打自己的脸。
+                    // 挂到尾部就没这问题：前缀（system + 已有历史）一个字没变。
+                    val board = AgentMemory.taskBoard(
+                        steps = steps,
+                        round = round,
+                        compressed = compressed,
+                        waitingConfirm = AgentTaskStore.pendingConfirm != null,
+                    ) + lessons.render()
+
+                    // 只用于这一次发送，不塞回 messages：
+                    // 下一轮会重算一份新的，历史里也不会留下一堆"系统状态"垃圾
+                    val payload = JSONArray()
+                    for (i in 0 until messages.length()) payload.put(messages.get(i))
+                    if (board.isNotBlank()) {
+                        payload.put(
+                            JSONObject()
+                                .put("role", "user")
+                                .put("content", "【这是系统自动生成的状态板，不是用户说的话】" + board)
+                        )
+                    }
+
+                    val r = AgentApi.stream(
+                        system = system,
+                        messages = payload,
+                        tools = tools,
+                        temperature = temperature,
+                        maxTokens = maxTokens,
+                        onReasoning = { t ->
+                            reasonAll.append(t)
+                            onReasoning(t)
+                            pushEvents(events, CardEvent.THINK, t)
+                            AgentTaskStore.setEvents(conversationId, events)
+                        },
+                        onDelta = { d ->
+                        onDelta(d)
+                        pushEvents(events, CardEvent.TEXT, d)
+                        AgentTaskStore.setEvents(conversationId, events)
+                        },
+                    )
+                    // "空"的定义：没正文 **且** 没工具调用
+                    if (r.text.isNotBlank() || r.toolCalls.isNotEmpty()) {
+                        reply = r
+                        break
+                    }
+                    attempt++
+                    if (attempt < 3) {
+                        onProgress("没收到内容，重试第 " + attempt + " 次…")
+                        kotlinx.coroutines.delay(1000L * attempt)
+                    } else {
+                        // 三次都是空的 —— 那就照实说，但把话说明白点
+                        reply = r
+                    }
+                }
+                val finalReply = reply ?: return@runCatching AgentRun(
+                    reply = "连着三次都没收到内容。可能是服务商那边抽了，或者 Key / 模型不对 —— 你到设置里检查一下。",
+                    toolLog = log,
+                    steps = steps,
+                    thinkRounds = round - 1,
+                    usage = AgentApi.Usage(cached, input, output, spent),
+                    reasoning = reasonAll.toString(),
+                )
+
+                cached += finalReply.usage.cachedTokens
+                input += finalReply.usage.inputTokens
+                output += finalReply.usage.outputTokens
+                spent += finalReply.usage.millis
+                onRound(round)
+
+                if (finalReply.toolCalls.isEmpty()) {
+                    AgentTaskStore.updateRunningTool(conversationId, "", "")
+                    return@runCatching AgentRun(
+                        reply = finalReply.text.ifBlank { "（模型没说话）" },
+                        toolLog = log,
+                        steps = steps,
+                        thinkRounds = round - 1,
+                        usage = AgentApi.Usage(cached, input, output, spent),
+                        reasoning = reasonAll.toString(),
+                    )
+                }
+
+                messages.put(AgentApi.assistantToolMessage(finalReply.toolCalls))
+
+                finalReply.toolCalls.forEach { call ->
+                    val brief = briefArgs(call.args)
+                    val label = friendlyName(call.name)
+                    onProgress("正在用 " + label)
+
+                    // 告诉界面"现在在跑什么"，好让进度条转起来
+                    AgentTaskStore.updateRunningTool(
+                    conversationId, label,
+                    guessHint(call.name, call.args),
+                    opDir(call.name, call.args),
+                    )
+
+                    val t0 = System.currentTimeMillis()
+                    var result = AgentTools.run(
+                        ctx, env, call.name, call.args,
+                        // 逐行看输出，认出下载进度和速度就更新到界面上
+                        onLine = { line ->
+                            Progress.parse(line)?.let { AgentTaskStore.updateToolProgress(conversationId, it) }
+                            Progress.speed(line)?.let { AgentTaskStore.updateToolSpeed(conversationId, it) }
+                        },
+                        // 后台下载的进度要报回**这个会话**那一份上（Store 是按会话分开的）
+                        conversationId = conversationId,
+                    )
+
+                    // ---- 要 root？弹窗问 ----
+                    //
+                    // 用户的要求：**勾了 root 也默认只用普通权限和沙箱**，
+                    // 只有 Agent 说"这条必须 su"时才拦。
+                    // 弹窗中间显示具体命令、下面显示它给的理由。
+                    // ---- 要用户点头的，全走这一条通道 ----
+                    //
+                    // root、危险命令、删除、写 sdcard 外……都带 RiskDecision 上来，
+                    // 这儿统一：挂到 Store 上 → 界面弹窗 → 等点 → 同意才跑 decision.run()。
+                    // 超时 90 秒当拒绝（用户可能压根没看手机，不能一直吊着会话）。
+                    result.decision?.let { d ->
+                        val gate = kotlinx.coroutines.CompletableDeferred<Boolean>()
+                        AgentTaskStore.pendingConfirm =
+                            AgentTaskStore.ConfirmRequest(conversationId, d, gate)
+                        AgentTaskStore.updateRunningTool(conversationId, "", "等你确认：" + d.title())
+                        onProgress("等你确认：" + d.title())
+
+                        val agreed = kotlinx.coroutines.withTimeoutOrNull(90_000L) { gate.await() } ?: false
+                        AgentTaskStore.pendingConfirm = null
+                        result = if (agreed) {
+                            AgentTaskStore.progress(conversationId, "你同意了，继续…")
+                            d.run()
+                        } else {
+                            AgentTaskStore.progress(conversationId, "没等到确认，跳过这个动作")
+                            ToolResult(
+                                false,
+                                d.refusedText() + "\n（也可能是他没看到手机，90 秒超时自动跳过的。）",
+                            )
+                        }
+                    }
+                    val cost = System.currentTimeMillis() - t0
+                    // ⚠️ 这里**故意不清**。
+                    // 以前每跑完一个工具就清一次、下一个再设一次，
+                    // 界面上那条"正在下载…"就一闪一闪（用户说的"一直闪"）。
+                    // 让它留着，等下一轮开始或者整轮结束时统一收。
+
+                    // ---- 连着失败就收手 ----
+                    if (result.ok) {
+                        consecutiveFail = 0
+                        lastFailedTool = ""
+                    } else {
+                        // 记进会话级的"踩过的坑"，下一轮的 system 里会带上
+                        lessons.note(call.name, result.output)
+                        if (call.name == lastFailedTool) {
+                            consecutiveFail++
+                        } else {
+                            lastFailedTool = call.name
+                            consecutiveFail = 1
+                        }
+                        if (consecutiveFail >= 3) {
+                            // 别让它继续撞了
+                            AgentTaskStore.updateRunningTool(conversationId, "", "")
+                            return@runCatching AgentRun(
+                                reply = "「" + label + "」连着 " + consecutiveFail +
+                                    " 次都失败了，我先停下。\n\n最后一次的报错：\n" +
+                                    result.output.take(600) +
+                                    "\n\n换个思路，或者你告诉我该怎么做。",
+                                toolLog = log,
+                                steps = steps,
+                                thinkRounds = round,
+                                usage = AgentApi.Usage(cached, input, output, spent),
+                                reasoning = reasonAll.toString(),
+                            )
+                        }
+                    }
+
+                    // 只记"用了什么、成没成、多大动静"，命令原文不进这条
+                    val line = "▸ " + label + " · " + brief +
+                        "\n    " + (if (result.ok) "完成" else "失败") +
+                        " · 返回 " + result.output.length + " 字 · " + cost + "ms" +
+                        if (result.ok) "" else "：" + result.output.take(200)
+                    log += line
+                    steps += ToolStep(
+                        name = call.name,
+                        label = label,
+                        brief = brief,
+                        ok = result.ok,
+                        outputChars = result.output.length,
+                        millis = cost,
+                    )
+                    val ev = CardEvent(
+                    kind = CardEvent.TOOL,
+                    label = toolLabel(call.name),
+                    brief = brief,
+                    detail = opDetail(call.name, call.args),
+                    dir = opDir(call.name, call.args),
+                    millis = cost,
+                    ok = result.ok,
+                    chars = result.output.length,
+                    )
+                    events += ev
+                    AgentTaskStore.addEvent(conversationId, ev)
+
+                    messages.put(
+                        AgentApi.toolMessage(
+                            call.id,
+                            call.name,
+                            if (result.ok) result.output else "出错了：" + result.output,
+                        )
+                    )
+                }
+            }
+
+            AgentRun(
+                reply = "（工具已经调了 " + maxRounds + " 轮还没完，先停一下）\n" +
+                    "想让它多跑的话，去聊天页那个 ⚙ 面板把「工具调用上限」设成不限。",
+                toolLog = log,
+                steps = steps,
+                thinkRounds = round,
+                usage = AgentApi.Usage(cached, input, output, spent),
+                reasoning = reasonAll.toString(),
+            )
+        }
+    }
+
+    /**
+     * 猜这条工具大概在干嘛。
+     *
+     * 重点是把**下载**认出来 —— 用户在 Agent 里让它下东西的时候，
+     * 界面上那条进度条得说"正在下载"，而不是干巴巴的"执行命令"。
+     */
+    private fun guessHint(toolName: String, args: JSONObject): String {
+        if (toolName != AgentTools.SHELL) {
+            return when (toolName) {
+                AgentTools.READ -> "正在读文件"
+                AgentTools.READ_MANY -> "正在批量读文件"
+                AgentTools.WRITE -> "正在写文件"
+                AgentTools.LIST -> "正在看目录"
+                AgentTools.DEVICE -> "正在问设备信息"
+                AgentTools.FIND -> "正在找文件"
+                AgentTools.GREP -> "正在搜内容"
+                AgentTools.BATCH -> "正在批量执行"
+                // 下载这两条都是"秒回"的，别写成"正在下载…"骗人以为在等
+                AgentTools.DOWNLOAD -> "正在起后台下载"
+                AgentTools.DOWNLOAD_CHECK -> "正在看下载进度"
+                AgentTools.FILE_OP -> "正在动文件"
+                AgentTools.DELETE -> "在等你同意删除"
+                AgentTools.TREE -> "正在看目录结构"
+                AgentTools.STAT -> "正在看文件信息"
+                AgentTools.ARCHIVE -> "正在弄压缩包"
+                AgentTools.APPS -> "正在列已装的 app"
+                AgentTools.OPEN -> "正在打开"
+                AgentTools.CLIPBOARD -> "正在动剪贴板"
+                AgentTools.NOTICE -> "正在发通知"
+                AgentTools.SHOT -> "正在截屏"
+ AddonTools.LIST, AddonTools.NEW, AddonTools.RELOAD, AddonTools.WINDOW,
+				CustomTools.NEW, CustomTools.LIST, CustomTools.DEL ->
+ AddonTools.hintOf(toolName)
+                else -> "正在干活"
+            }
+        }
+        val cmd = args.optString("command", "").lowercase()
+        return when {
+            cmd.contains("curl") || cmd.contains("wget") -> "正在下载…"
+            cmd.contains("git clone") || cmd.contains("git pull") -> "正在拉代码…"
+            cmd.contains("pkg install") || cmd.contains("apt install") ||
+                cmd.contains("apt-get install") -> "正在装东西…"
+            cmd.contains("tar ") || cmd.contains("unzip") || cmd.contains("7z ") -> "正在解压…"
+            cmd.contains("cp ") || cmd.contains("mv ") || cmd.contains("rsync") -> "正在拷文件…"
+            cmd.contains("find ") || cmd.contains("grep ") -> "正在找东西…"
+            else -> "正在执行命令"
+        }
+    }
+
+    /** 工具的内部名字 → 人话 */
+    private fun friendlyName(name: String): String = when (name) {
+        AgentTools.SHELL -> "执行命令"
+        AgentTools.BATCH -> "批量执行"
+        AgentTools.READ_MANY -> "批量读文件"
+        AgentTools.FIND -> "找文件"
+        AgentTools.GREP -> "搜内容"
+        AgentTools.READ -> "读文件"
+        AgentTools.WRITE -> "写文件"
+        AgentTools.LIST -> "看目录"
+        AgentTools.DEVICE -> "看设备信息"
+        AgentTools.DOWNLOAD -> "后台下载"
+        AgentTools.DOWNLOAD_CHECK -> "问下载进度"
+        AgentTools.FILE_OP -> "文件操作"
+        AgentTools.DELETE -> "删除"
+        AgentTools.TREE -> "看目录树"
+        AgentTools.STAT -> "看文件信息"
+        AgentTools.ARCHIVE -> "压缩包"
+        AgentTools.APPS -> "列应用"
+        AgentTools.OPEN -> "打开应用/文件"
+        AgentTools.CLIPBOARD -> "剪贴板"
+        AgentTools.NOTICE -> "发通知"
+        AgentTools.SHOT -> "截屏"
+			AddonTools.LIST -> "看本地功能"
+			AddonTools.NEW -> "新建本地功能"
+			AddonTools.RELOAD -> "刷新功能页"
+			AddonTools.WINDOW -> "开关悬浮窗"
+			CustomTools.NEW -> "写新工具"
+			CustomTools.LIST -> "看自己写的工具"
+			CustomTools.DEL -> "删自定义工具"
+        else -> name
+    }
+
+    /** 参数摘要，给界面显示一行 */
+    private fun briefArgs(args: JSONObject): String {
+        val s = args.toString()
+        return if (s.length <= 120) s else s.take(120) + "…"
+    }
+}

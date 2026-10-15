@@ -90,7 +90,10 @@ class MainActivity : ComponentActivity() {
                     )
                 }
 
-                if (!setupDoneFlag.value) {
+                val introDone = remember { androidx.compose.runtime.mutableStateOf(false) }
+                if (!setupDoneFlag.value && !introDone.value) {
+                	lo.naui.ui.splash.IntroScreen(onDone = { introDone.value = true })
+                } else if (!setupDoneFlag.value) {
                     lo.naui.ui.setup.SetupScreen(
                         onFinish = { setupDoneFlag.value = true }
                     )

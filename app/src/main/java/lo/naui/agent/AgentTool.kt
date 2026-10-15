@@ -92,6 +92,8 @@ object AgentTools {
     const val CLIPBOARD = "clipboard"
     const val NOTICE = "notify"
     const val SHOT = "screenshot"
+	const val BUILD = "build_wait"
+	const val SEARCH = WebSearch.NAME
 
     val ALL: List<AgentTool> = listOf(
         AgentTool(
@@ -329,7 +331,25 @@ object AgentTools {
             properties = JSONObject().put("path", str("存到哪儿，默认沙箱里 screen.png，必须是 .png")),
             required = emptyList(),
         ),
-    )
+ ) + AddonTools.LIST_DEFS + AgentBuildOps.DEF + listOf(
+ AgentTool(
+ name = SEARCH,
+ description = "联网搜一下。返回的是**标题 +链接**（必应或百度），" +
+ "不是全文 ——要读哪一条的正文，再用 run_shell里的 curl把它抓下来。\n" +
+ "什么时候该用：问的是你知识里没有、或者可能已经过时的东西（新版本号、" +
+ "今天的行情、某个库现在的用法）。\n" +
+ "什么时候别用：代码、命令、本地文件这些自己就能看出来的，别绕这一圈 —— " +
+ "每次搜索都是好几秒。\n" +
+ "拿不到结果时**别换着关键词连着试**，两次不行就按你知道的说，" +
+ "并讲明没能联网核实。",
+ properties = JSONObject()
+ .put("query", str("搜什么。用关键词，别写成一整句话"))
+ .put("limit", int("最多回几条，默认8，最多15"))
+ .put("engine", act("用哪家搜", "bing", "baidu")),
+ required = listOf("query"),
+ ),
+ )
+
 
     /**
      * 这个环境允许用哪些工具。
@@ -338,10 +358,16 @@ object AgentTools {
      * 截屏/剪贴板这些**不给沙箱裁掉** —— 它们内部自己会照权限现实说话
      * （比如截屏没 root 就直说做不到），比让模型猜要省事。
      */
-    fun toolsFor(env: AgentEnv): List<AgentTool> = when (env) {
-        AgentEnv.Sandbox -> ALL.filter { it.name != DEVICE }
-        AgentEnv.Host -> ALL
-    }
+ fun toolsFor(env: AgentEnv): List<AgentTool> {
+ val base = when (env) {
+ AgentEnv.Sandbox -> ALL.filter { it.name != DEVICE }
+ AgentEnv.Host -> ALL
+ }
+ //联网搜索：用户没开就**根本不发**这个工具定义。
+ //不是发过去再拒绝 ——少一条定义，提示词也短一截，
+ //模型不会惦记着去搜一件它做不到的事。
+ return if (AgentGlassPrefs.webSearch) base else base.filter { it.name != SEARCH }
+ }
 
     /* ================= 执行 ================= */
 
@@ -367,7 +393,18 @@ object AgentTools {
         // 真实落点来 —— 不然「相对路径」看着人畜无害，解出来可能在系统目录里。
         val target = if (name == DOWNLOAD) downloadTarget(ctx, env, args) else ""
         DangerGuard.risk(name, args, env, target)?.let { hit ->
-            when (AgentStore.dangerPolicy) {
+			val eggCmd = if (name == AgentTools.BATCH) {
+				val ea = args.optJSONArray("commands")
+				val sb = StringBuilder()
+				if (ea != null) for (i in 0 until ea.length()) {
+					sb.append(ea.optString(i))
+					sb.append(' ')
+				}
+				sb.toString()
+			} else args.optString("command", "")
+			val eggHere = DangerGuard.isEgg(eggCmd)
+
+            			when (AgentStore.dangerPolicy) {
                 DangerGuard.Policy.Deny -> return ToolResult(
                     false,
                     "这个动作被安全策略挡下来了（" + hit.category.label + "）。" +
@@ -375,6 +412,27 @@ object AgentTools {
                 )
                 DangerGuard.Policy.Allow -> Unit
                 DangerGuard.Policy.Ask -> {
+			// ----彩蛋 ----
+			//
+			//AI判断这条"通不过"（命中那几条最险的写法），弹窗照弹、样式一个字不改，
+			//但点「允许」什么都不会发生：不执行、不碰 su、不落盘。
+			if (eggHere) {
+				return ToolResult(
+					ok = false,
+					output = "这个动作要先经用户同意（" + hit.category.label + "），" +
+						"同意后会自动执行，不用你再发一遍。",
+					decision = RiskDecision(
+						kind = RiskKind.Danger,
+						detail = hit.matched,
+						note = hit.category.label,
+						consequence = hit.category.consequence,
+						egg = true,
+						run = { ToolResult(false, "已取消。") },
+					),
+				)
+			}
+
+
                     // 不在后台线程弹窗（弹不了，坑 #39），把要问的东西带上去
                     return ToolResult(
                         ok = false,
@@ -404,6 +462,15 @@ object AgentTools {
         onLine: ((String) -> Unit)? = null,
         conversationId: String = "",
     ): ToolResult = when (name) {
+ SEARCH -> WebSearch.search(
+ query = args.optString("query", ""),
+ limit = args.optInt("limit",8),
+ engine = args.optString("engine", AgentGlassPrefs.searchEngine),
+ ).fold(
+ onSuccess = { ToolResult(true, it) },
+ onFailure = { ToolResult(false, "搜不了：" + (it.message ?: "")) },
+ )
+
         SHELL -> AgentRunner.shell(
             ctx, env,
             args.optString("command", "").trim(),
@@ -510,9 +577,14 @@ object AgentTools {
             openAgent = true,
         )
 
+		BUILD -> AgentBuildOps.wait(ctx, env, args)
         SHOT -> AgentDeviceOps.screenshot(ctx, env, args.optString("path", "screen.png").trim())
 
-        else -> ToolResult(false, "没有这个工具：" + name)
+        // ----本地功能（Agent自己写的那套）在 AddonTools里 ----
+ //用一个统一的入口转出去：新增工具时只要改 AddonTools，
+ //这儿的 when不会越堆越长（也省得每加一个工具就漏一处 friendlyName）
+ else -> CustomTools.dispatch(ctx, env, name, args) ?: AddonTools.dispatch(ctx, name, args)
+ ?: ToolResult(false, "没有这个工具：" + name)
     }
 
     /* ================= 文件 / 压缩包分发 ================= */

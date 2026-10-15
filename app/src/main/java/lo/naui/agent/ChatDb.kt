@@ -68,6 +68,14 @@ object ChatDb {
                     toolSteps = o.optJSONArray("tool_steps")?.let { a ->
                         (0 until a.length()).map { a.optString(it) }
                     }.orEmpty(),
+                    usage = o.optJSONObject("usage")?.let { u ->
+                        AgentApi.Usage(
+                            cachedTokens = u.optInt("cached",0),
+                            inputTokens = u.optInt("input",0),
+                            outputTokens = u.optInt("out",0),
+                            millis = u.optLong("millis",0L),
+                        )
+                    } ?: AgentApi.Usage(),
                 )
             }
         }.getOrDefault(emptyList())
@@ -87,6 +95,11 @@ object ChatDb {
                         .put("think_rounds", m.thinkRounds)
                         .put("tool_log", JSONArray().also { a -> m.toolLog.forEach { a.put(it) } })
                         .put("tool_steps", JSONArray().also { a -> m.toolSteps.forEach { a.put(it) } })
+                        .put("usage", JSONObject()
+                            .put("cached", m.usage.cachedTokens)
+                            .put("input", m.usage.inputTokens)
+                            .put("out", m.usage.outputTokens)
+                            .put("millis", m.usage.millis))
                 )
             }
             val root = JSONObject()

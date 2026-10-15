@@ -75,7 +75,12 @@ fun HomeScreen(
         // `pending ?: return`，而上滑这条路**从不 pend 坐标**（只有主题页
         // 那个三选一按钮会登记位置），于是整条换图被静默丢掉 ——
         // 表现就是"主页上滑刷新失效"。fire 现在有默认圆心，这条路通了。
-        if (changeHero) prefs?.nextHero(ctx)
+        if (changeHero) {
+ //上滑刷新 →背景**直接换**（外壳那层 Crossfade会淡过去 =虚化切图）。
+ //涟漪那套从1.03.0起是"主题页点按钮换样式"的专属效果。
+ lo.naui.ui.theme.BgRipples.plain = true
+ prefs?.nextHero(ctx)
+ }
         topPriv = runCatching { Privilege.topInfo(ctx) }.getOrNull()
         deviceLine = Build.MANUFACTURER + " " + Build.MODEL
         // 右边那栏：LSPosed 的框架版本 + API 版本

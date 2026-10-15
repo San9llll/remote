@@ -74,6 +74,11 @@ import com.kyant.backdrop.drawBackdrop
 import com.kyant.backdrop.effects.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
@@ -206,6 +211,7 @@ fun AgentScreen(
                 thinkRounds = it.thinkRounds,
                 reasoning = it.reasoning,
                 steps = it.toolSteps,
+usage = it.usage,
             )
         }
         convTitle = ChatDb.titleOf(stored)
@@ -223,6 +229,7 @@ fun AgentScreen(
                 thinkRounds = it.thinkRounds,
                 toolLog = it.toolLog,
                 toolSteps = it.steps,
+usage = it.usage,
             )
         }
         convTitle = ChatDb.titleOf(plain)
@@ -248,9 +255,7 @@ fun AgentScreen(
                     thinkRounds = r.thinkRounds,
                     usage = r.usage,
                     reasoning = r.reasoning,
-                    steps = r.steps.map { st ->
-                        st.label + "|" + st.brief + "|" + st.ok + "|" + st.outputChars + "|" + st.millis
-                    },
+                    steps = lo.naui.agent.CardEvent.encodeAll(r.timeline),
                 )
                 messages = next
                 persist(next)
@@ -283,9 +288,7 @@ fun AgentScreen(
                         thinkRounds = r.thinkRounds,
                         usage = r.usage,
                         reasoning = r.reasoning,
-                        steps = r.steps.map { st ->
-                            st.label + "|" + st.brief + "|" + st.ok + "|" + st.outputChars + "|" + st.millis
-                        },
+                        steps = lo.naui.agent.CardEvent.encodeAll(r.timeline),
                     )
                     messages = next
                     persist(next)
@@ -294,7 +297,31 @@ fun AgentScreen(
     }
 
     fun send() {
-        if (sending) return
+		//跑着的时候按发送 = **插话**。
+		//
+		//不打断正在跑的那一轮：把话排进队列，AgentChat会在
+		// "上一轮工具跑完、下一次请求还没发"的缝里把它接成一条 user消息。
+		//直接 cancel重开是不行的 ——正在流的正文和这一轮的工具结果会全断。
+		if (sending) {
+			val files = pending.filter { !it.isImage }
+			val said = buildString {
+				files.forEach { a ->
+					append("<file name=\"").append(a.name).append("\">\n")
+					append(a.text)
+					append("\n</file>\n\n")
+				}
+				append(draft)
+			}.trim()
+			if (said.isBlank()) return
+			val cid = AgentStore.activeConvId ?: return
+			val next = messages + UiMessage(nextKey(), "user", said,0)
+			messages = next
+			draft = ""
+			pending = emptyList()
+			persist(next)
+			AgentTaskStore.interject(cid, said)
+			return
+		}
         val textFiles = pending.filter { !it.isImage }
         val images = pending.filter { it.isImage }.map { it.dataUrl }
         // 附件的写法有讲究。
@@ -337,6 +364,7 @@ fun AgentScreen(
                 thinkRounds = it.thinkRounds,
                 toolLog = it.toolLog,
                 toolSteps = it.steps,
+usage = it.usage,
             )
         }
         convTitle = ChatDb.titleOf(plain)
@@ -474,54 +502,20 @@ fun AgentScreen(
             )
         }
 
-        // ---- 输入栏：文件 · 模型 · 输入 · 发送 ----
-        Row(
-            Modifier
-                .fillMaxWidth()
-                // 键盘弹起来时整条跟着抬 —— 不加的话输入框会被挡住
-                .imePadding()
-                .padding(horizontal = 12.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            RoundBtn("📎") { filePicker.launch(arrayOf("*/*")) }
-            RoundBtn("⚙") { sheetOpen = true }
-
-            BasicTextField(
-                value = draft,
-                onValueChange = { draft = it },
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(MiuixTheme.colorScheme.surfaceContainerHigh)
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                textStyle = TextStyle(fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurface),
-                cursorBrush = SolidColor(MiuixTheme.colorScheme.primary),
-            )
-
-            Box(
-                Modifier
-                    .clip(RoundedCornerShape(50))
-                    .background(
-                        if (sending || !AgentStore.ready) {
-                            MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.18f)
-                        } else {
-                            MiuixTheme.colorScheme.primary
-                        }
-                    )
-                    .clickable(enabled = !sending) { send() }
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
-            ) {
-                Text(
-                    if (sending) "…" else "发送",
-                    fontSize = 13.5.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = if (sending || !AgentStore.ready) MiuixTheme.colorScheme.onSurfaceVariantSummary
-                    else MiuixTheme.colorScheme.onPrimary,
-                )
-            }
-        }
-    }
+ // ----底部那条：+ ·输入 ·发送（整条液态玻璃）----
+ //
+ //用户要的：两个圆钮合成一个 `+`，点开才展开「上传文件 /设置」；
+ //输入栏只露1.5行（多出来的自己滚，不占半屏）。
+ AgentComposer(
+ draft = draft,
+ onDraft = { draft = it },
+ sending = sending,
+ ready = AgentStore.ready,
+ onPickFile = { filePicker.launch(arrayOf("*/*")) },
+ onOpenSettings = { sheetOpen = true },
+ onSend = { send() },
+ )
+ }
 
     if (sheetOpen) {
         ModelSheet(onDismiss = { sheetOpen = false })
@@ -744,7 +738,6 @@ private fun Bubble(
     val ctx = LocalContext.current
     val mine = m.role == "user"
     val shape = RoundedCornerShape(16.dp)
-    var toolsOpen by remember { mutableStateOf(false) }
     var usageOpen by remember { mutableStateOf(false) }
     var deleteOpen by remember { mutableStateOf(false) }
 
@@ -809,8 +802,7 @@ private fun Bubble(
                     .widthIn(max = 300.dp)
                     .clip(shape),
             ) {
-                GlassCard(
-                    backdrop = null,
+                AgentGlassCard(
                     shape = shape,
                     contentPadding = 13.dp,
                 ) {
@@ -824,58 +816,36 @@ private fun Bubble(
                             )
                         }
 
-                        RichText(
-                            text = m.text.ifBlank { "（空）" },
-                            highlight = !mine,
-                            onOpenUrl = { url ->
-                                runCatching {
-                                    ctx.startActivity(
-                                        Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                    )
-                                }
-                            },
-                            onOpenPath = { path -> openWithBuiltinFiles(ctx, path) },
-                        )
+ if (mine) {
+ RichText(
+ text = m.text.ifBlank { "（空）" },
+ highlight = false,
+ onOpenUrl = { url ->
+ runCatching {
+ ctx.startActivity(
+ Intent(Intent.ACTION_VIEW, Uri.parse(url))
+ .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+ )
+ }
+ },
+ onOpenPath = { path -> openWithBuiltinFiles(ctx, path) },
+ )
+ } else {
+ CardBody(
+ events = lo.naui.agent.CardEvent.decodeAll(m.steps),
+ fallbackText = m.text,
+ onOpenUrl = { url ->
+ runCatching {
+ ctx.startActivity(
+ Intent(Intent.ACTION_VIEW, Uri.parse(url))
+ .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+ )
+ }
+ },
+ onOpenPath = { path -> openWithBuiltinFiles(ctx, path) },
+ )
+ }
 
-                        // ---- 想了几次 / 用了几次工具（左上角，点了展开）----
-                        if (!mine && (m.thinkRounds > 0 || m.steps.isNotEmpty())) {
-                            Spacer(Modifier.height(8.dp))
-                            ThinkChip(
-                                rounds = m.thinkRounds,
-                                reasoning = m.reasoning,
-                                steps = m.steps,
-                                expanded = toolsOpen,
-                                onToggle = { toolsOpen = !toolsOpen },
-                            )
-
-                            androidx.compose.animation.AnimatedVisibility(
-                                visible = toolsOpen,
-                                enter = expandVertically(tween(260)) + fadeIn(tween(200)),
-                                exit = shrinkVertically(tween(200)) + fadeOut(tween(140)),
-                            ) {
-                                Column(
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .padding(top = 6.dp)
-                                        .clip(RoundedCornerShape(10.dp))
-                                        .background(MiuixTheme.colorScheme.surfaceContainerHigh)
-                                        .padding(10.dp),
-                                ) {
-                                    if (m.reasoning.isNotBlank()) {
-                                        Text(
-                                            m.reasoning,
-                                            fontSize = 11.sp,
-                                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                                            maxLines = 12,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                        Spacer(Modifier.height(8.dp))
-                                    }
-                                    StepList(m.steps)
-                                }
-                            }
-                        }
                     }
                 }
             }
@@ -894,25 +864,28 @@ private fun Bubble(
                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
             )
             if (!mine && m.usage.outputTokens > 0) {
-                Box(
-                    Modifier
-                        .size(16.dp)
-                        .clip(CircleShape)
-                        .background(
-                            if (usageOpen) MiuixTheme.colorScheme.primary
-                            else MiuixTheme.colorScheme.surfaceContainerHigh
-                        )
-                        .clickable { usageOpen = !usageOpen },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        "!",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = if (usageOpen) MiuixTheme.colorScheme.onPrimary
-                        else MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                    )
-                }
+ //用户要的：「显示 token的按钮不要黑色半透背景」。
+ //改成**只有一圈细描边**，底是透的 ——悬在气泡下面不再糊一坨黑。
+ Box(
+ Modifier
+ .size(18.dp)
+ .clip(CircleShape)
+ .border(
+1.dp,
+ if (usageOpen) MiuixTheme.colorScheme.primary
+ else MiuixTheme.colorScheme.onSurfaceVariantSummary
+ .copy(alpha =0.5f),
+ CircleShape,
+ )
+ .clickable { usageOpen = !usageOpen },
+ contentAlignment = Alignment.Center,
+ ) {
+ BangIcon(
+ dim =11.dp,
+ color = if (usageOpen) MiuixTheme.colorScheme.primary
+ else MiuixTheme.colorScheme.onSurfaceVariantSummary,
+ )
+ }
             }
         }
 
@@ -1059,81 +1032,6 @@ private fun RunningBar(
     }
 }
 
-/** 那个"思考了 N 次"的小标签 */
-@Composable
-private fun ThinkChip(
-    rounds: Int,
-    reasoning: String,
-    steps: List<String>,
-    expanded: Boolean,
-    onToggle: () -> Unit,
-) {
-    Row(
-        Modifier
-            .clip(RoundedCornerShape(50))
-            .background(MiuixTheme.colorScheme.surfaceContainerHigh)
-            .clickable { onToggle() }
-            .padding(horizontal = 10.dp, vertical = 5.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            buildString {
-                if (rounds > 0) append("思考了 ").append(rounds).append(" 次")
-                if (rounds > 0 && steps.isNotEmpty()) append(" · ")
-                if (steps.isNotEmpty()) append("用了 ").append(steps.size).append(" 次工具")
-            }.ifBlank { "过程" },
-            fontSize = 10.5.sp,
-            color = MiuixTheme.colorScheme.primary,
-        )
-        Spacer(Modifier.width(4.dp))
-        Text(
-            if (expanded) "▾" else "▸",
-            fontSize = 10.5.sp,
-            color = MiuixTheme.colorScheme.primary,
-        )
-    }
-}
-
-/** 工具步骤列表 —— 这里用灰字，用户点名要的 */
-@Composable
-private fun StepList(steps: List<String>) {
-    steps.forEach { raw ->
-        val parts = raw.split("|")
-        val label = parts.getOrElse(0) { "工具" }
-        val brief = parts.getOrElse(1) { "" }
-        val ok = parts.getOrElse(2) { "true" }.toBoolean()
-        val chars = parts.getOrElse(3) { "0" }
-        val ms = parts.getOrElse(4) { "0" }
-
-        Row(
-            Modifier.fillMaxWidth().padding(vertical = 3.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                "▸ " + label,
-                fontSize = 10.5.sp,
-                // 灰色字体
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-            )
-            Spacer(Modifier.weight(1f))
-            Text(
-                (if (ok) "完成" else "失败") + " · " + chars + "字 · " + ms + "ms",
-                fontSize = 10.sp,
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.75f),
-            )
-        }
-        if (brief.isNotBlank()) {
-            Text(
-                brief,
-                fontSize = 10.sp,
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.65f),
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(start = 12.dp, bottom = 3.dp),
-            )
-        }
-    }
-}
 
 /**
  * 正在生成的那一条。
@@ -1148,7 +1046,6 @@ private fun StreamingBubble(convId: String?) {
     val reasoning = st.reasoning
     val text = st.text
     val rounds = st.rounds
-    val steps = st.steps
     val runningTool = st.tool
     val runningToolHint = st.toolHint
     val toolProgress = st.progress
@@ -1183,92 +1080,25 @@ private fun StreamingBubble(convId: String?) {
                     .widthIn(max = 300.dp)
                     .clip(shape),
             ) {
-                GlassCard(backdrop = null, shape = shape, contentPadding = 13.dp) {
+                AgentGlassCard(shape = shape, contentPadding = 13.dp) {
                     Column {
-                        // ---- 思考框：液态玻璃里单独一个框，出现带动画 ----
-                        androidx.compose.animation.AnimatedVisibility(
-                            visible = reasoning.isNotBlank(),
-                            enter = expandVertically(tween(300)) + fadeIn(tween(240)),
-                            exit = shrinkVertically(tween(240)) + fadeOut(tween(160)),
-                        ) {
-                            Column(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .padding(bottom = 8.dp)
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(MiuixTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.7f))
-                                    .padding(10.dp),
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        "正在想…",
-                                        fontSize = 10.5.sp,
-                                        color = MiuixTheme.colorScheme.primary,
-                                    )
-                                    if (rounds > 0) {
-                                        Text(
-                                            "（第 " + rounds + " 轮）",
-                                            fontSize = 10.sp,
-                                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                                        )
-                                    }
-                                }
-                                Spacer(Modifier.height(6.dp))
-                                // ⚠️ 显示**最后一段**，不是开头。
-                                // 以前直接 Text(reasoning, maxLines=10)，超了就从尾巴截断，
-                                // 结果一直在看开头那几行，新想出来的东西全被挡住了 ——
-                                // 用户说的"思考内容显示不要固定，有新的要显示出来"就是它。
-                                Text(
-                                    if (reasoning.length > 420) "…\n" + reasoning.takeLast(420)
-                                    else reasoning,
-                                    fontSize = 11.sp,
-                                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                                )
-                            }
-                        }
+ CardBody(
+ events = st.events,
+ fallbackText = if (st.events.isEmpty()) text else "",
+ runningLabel = runningTool,
+ runningHint = runningToolHint,
+ runningDir = st.toolDir,
+ )
 
-                        if (text.isNotBlank()) {
-                            RichText(
-                                text = text,
-                                highlight = true,
-                                onOpenUrl = {},
-                                onOpenPath = {},
-                            )
-                        } else if (reasoning.isBlank()) {
-                            Text(
-                                "…",
-                                fontSize = 14.sp,
-                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                            )
-                        }
-
-                        // ---- 正在跑的工具：一条进度条 ----
-                        // AI 在下载大东西的时候，光看"正在下载…"字没有反馈，
-                        // 所以给一条会动的条子
-                        if (runningTool.isNotBlank()) {
-                            Spacer(Modifier.height(8.dp))
-                            RunningBar(
-                                label = runningTool,
-                                hint = runningToolHint,
-                                progress = toolProgress,
-                                speed = toolSpeed,
-                            )
-                        }
-
-                        // 已经用过的工具。只露最近 4 条 —— 跑几十轮的时候
-                        // 全列出来会把新的一直挤到屏幕外，看不到正在发生什么
-                        if (steps.isNotEmpty()) {
-                            Spacer(Modifier.height(8.dp))
-                            if (steps.size > 4) {
-                                Text(
-                                    "…前面还有 " + (steps.size - 4) + " 步",
-                                    fontSize = 10.sp,
-                                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                                )
-                                Spacer(Modifier.height(2.dp))
-                            }
-                            StepList(steps.takeLast(4))
-                        }
+ if (runningTool.isNotBlank()) {
+ Spacer(Modifier.height(8.dp))
+ RunningBar(
+ label = runningTool,
+ hint = runningToolHint,
+ progress = toolProgress,
+ speed = toolSpeed,
+ )
+ }
                     }
                 }
             }
@@ -1316,7 +1146,7 @@ private fun openWithBuiltinFiles(ctx: Context, path: String) {
  * - 文件路径 → 同样的淡蓝，点了进内置文件管理
  */
 @Composable
-private fun RichText(
+internal fun RichText(
     text: String,
     highlight: Boolean = true,
     onOpenUrl: (String) -> Unit,
@@ -1824,3 +1654,33 @@ private suspend fun readTextFile(ctx: Context, uri: Uri): ChatAttachment? =
             )
         }.getOrNull()
     }
+
+
+/**
+ *那个「!」按钮。
+ *
+ *以前是 Text("!")塞进 CircleShape里 ——字重、圈的粗细、跟字号都对不上。
+ *现在用 Canvas手画：外圈一道细描边 +中间一竖一点，尺寸跟着传进来的 dim缩放。
+ */
+@Composable
+private fun BangIcon(dim: Dp, color: Color) {
+ Canvas(Modifier.size(dim)) {
+ val r = this.size.minDimension /2f
+ val cx = this.size.width /2f
+ val cy = this.size.height /2f
+ drawCircle(
+ color = color,
+ radius = r - r *0.10f,
+ center = Offset(cx, cy),
+ style = Stroke(width = r *0.17f),
+ )
+ drawLine(
+ color = color,
+ start = Offset(cx, cy - r *0.52f),
+ end = Offset(cx, cy + r *0.10f),
+ strokeWidth = r *0.20f,
+ cap = StrokeCap.Round,
+ )
+ drawCircle(color = color, radius = r *0.115f, center = Offset(cx, cy + r *0.48f))
+ }
+}

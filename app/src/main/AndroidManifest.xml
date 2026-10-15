@@ -35,6 +35,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+ <!--本地功能（Agent自己写的）悬浮窗要的 ——Android14+不声明这个，
+ startForeground会直接抛 -->
+ <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <!-- ============ 杂项 ============ -->
     <uses-permission android:name="android.permission.VIBRATE" />
@@ -120,5 +123,11 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
-    </application>
+    <!--本地功能（Agent自己写的那些）的悬浮窗 ——1.03.0加的 -->
+ <service
+ android:name=".ui.addon.AddonFloatingService"
+ android:exported="false"
+ android:foregroundServiceType="specialUse" />
+
+ </application>
 </manifest>

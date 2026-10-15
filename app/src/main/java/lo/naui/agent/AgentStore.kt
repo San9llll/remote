@@ -32,7 +32,7 @@ object AgentStore {
     /**
      * 最大回复长度。
      *
-     * **0 = 不限**，这时候请求里**不带 max_tokens 字段**。
+     * ** 0 = 不限**，这时候请求里**不带 max_tokens 字段**。
      * （以前是塞个 1000000 当"不限"，结果有些家直接报错 ——
      * 超过它自己的上限就拒绝，所以改成"干脆不带"。）
      */
@@ -42,7 +42,7 @@ object AgentStore {
     /**
      * 一次对话最多让它调几轮工具。
      *
-     * 以前写死 8，一撞到就卡在"工具已经使用 8 次"。现在可配，**0 = 不限**。
+     * 以前写死 8，一撞到就卡在"工具已经使用 8 次"。现在可配，** 0 = 不限**。
      */
     var maxToolRounds by mutableStateOf(16)
         private set
@@ -51,7 +51,7 @@ object AgentStore {
      * 模型上下文长度（token，粗略估：1 token ≈ 1.5 字符）。
      *
      * 这是"该不该压上下文"的分母 —— 没有它，shouldCompress 就只能是个死函数
-     * （1.02.0 之前就是这样：COMPRESS_THRESHOLD=0.82 写得挺像样，**没人调用过**）。
+     * （1.02.0 之前就是这样：COMPRESS_THRESHOLD= 0.82 写得挺像样，**没人调用过**）。
      * 默认按 64k 给，DeepSeek / 通义那几家常用档都够得着。
      * 设太小会过早压缩（丢细节），设太大有服务商直接报 400 —— 所以做成可选项。
      */
@@ -64,7 +64,7 @@ object AgentStore {
     }
 
     fun updateMaxToolRounds(v: Int) {
-        // **0 或负数 = 不限轮数**（用户要的"无限工具使用次数"）。
+        // ** 0 或负数 = 不限轮数**（用户要的"无限工具使用次数"）。
         // 真·无限是没有的 —— AgentChat 那边压了个 500 的硬顶，
         // 免得模型自己绕死把手机跑烫。
         maxToolRounds = if (v <= 0) 0 else v
@@ -74,13 +74,15 @@ object AgentStore {
     fun init(ctx: Context) {
         if (sp != null) return
         val p = ctx.getSharedPreferences("nakour_agent", Context.MODE_PRIVATE)
+ // Agent页自己的玻璃参数 +联网搜索开关（跟主题分开的那一份）
+ AgentGlassPrefs.init(ctx)
         sp = p
         baseUrl = p.getString("base_url", DEFAULT_BASE) ?: DEFAULT_BASE
         apiKey = p.getString("api_key", "") ?: ""
         model = p.getString("model", "deepseek-chat") ?: "deepseek-chat"
         systemPrompt = p.getString("system_prompt", "") ?: ""
         temperature = p.getFloat("temperature", 0.7f)
-        maxTokens = p.getInt("max_tokens", 0)
+ maxTokens = p.getInt("max_tokens", 0).let { if (it >= 1_000_000) 0 else it }
         maxToolRounds = p.getInt("max_tool_rounds", 16)
         contextLimit = p.getInt("context_limit", 64_000)
         env = p.getString("env", AgentEnv.Sandbox.id)?.let { AgentEnv.of(it) } ?: AgentEnv.Sandbox
@@ -209,12 +211,30 @@ object AgentStore {
 **沙箱**：默认只能在 app 自己目录里动。工具说"这路径在沙箱外面，让用户切到本机（root）"
 时**别再换写法重试** —— 那是环境不对，不是命令写错。
 
+**给这台 App加功能**：用户说「给我写个 XX工具 /做个 XX面板 /要个悬浮窗」的时候，
+用 `addon_new`建一个**本地功能**（它会连模板一起写好），然后用 `write_file`改
+`addons/<id>/pages.json`（页面长什么样）和 `addons/<id>/ui/welcome.json`（悬浮窗），
+改完调一次 `addon_reload` ——功能页当场就多出一张卡，**不用重装 App**。
+能用的积木和动作写在 `addon_new`的说明里，照着填就行；改完最好 `addon_list`确认一遍。
+要飘到屏幕上就用 `addon_window`（那条有权限门槛，没权限它会告诉你，你照实跟用户说）。
+想让它挂在屏幕边上（平时只露一条细柄、划开才滑出来，像系统那个侧边栏）就在 welcome.json里加一行 edge，值写 right或 left。
+
+**自己写工具**：同一串命令你反复拼的时候（或者用户说「给我加个 XX工具」），用 `tool_new`把它固化成工具 ——一条命令模板 +一张参数表，**下一轮就出现在你的工具表里**，直接调。`tool_list`看有哪些，要改就先 `tool_delete`再建。
+
+**编译托管**：这台机器上编一版 APK要三四分钟，`run_shell`单条命令等不了那么久 ——
+所以**别**起后台然后 `sleep`轮询（用户原话：「不用一直设置 sleep」；这台机器上真出过
+几十次工具调用全花在轮询上）。要编译就调一次 `build_wait`，它会在那边守着，
+**出结果才返回**：成功还是失败、关键报错行、日志末尾，一次拿到。
+只想守着已经在跑的那次，传 `restart=false`。
+
 **工作区**：用户可能在 Agent 设置里指定一个文件夹（所有会话共用），要存东西优先放那儿，别乱扔到系统目录。路径见下面这行：
 
 【工作区】
 
 **下载**：下东西用 `start_download` —— 它是后台下载，**秒回一个 id**，下多久都不占这条工具调用；要看进度发一条 `check_download` 问一句，别原地反复问。
 别用 `run_shell` 跑 curl/wget 等大文件：命令有超时，大文件必然被掐断，你看不出是被掐了就会一直重试（这台机器真出过 51 次工具 30 次思考还没下完）。只有几百 KB 以内的小文件才用 curl，且务必带进度参数（`-#` / `--show-progress`），设备那边才能把百分比和速度显示出来。
+
+**思考**：思考过程（reasoning）默认用**中文**写，正文也用中文 ——除非用户明确要求别的语言。
 """
 
     fun selectPersona(id: String) {

@@ -38,11 +38,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import lo.naui.agent.AgentApi
+import lo.naui.agent.AgentGlassPrefs
 import lo.naui.agent.AgentStore
 import lo.naui.agent.PROVIDERS
 import lo.naui.ui.common.BottomSheet
 import lo.naui.ui.common.PageHeader
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.preference.SliderPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
@@ -182,7 +184,7 @@ fun AgentConfigScreen(
             ) {
                 Text("最大回复长度", fontSize = 13.sp, modifier = Modifier.weight(1f))
                 Text(
-                    if (AgentStore.maxTokens >= 1_000_000) "不限（默认）"
+ if (AgentStore.maxTokens <=0) "不限（默认）"
                     else AgentStore.maxTokens.toString(),
                     fontSize = 12.5.sp,
                     color = MiuixTheme.colorScheme.primary,
@@ -207,6 +209,158 @@ fun AgentConfigScreen(
                 )
             }
 
+ /* =================工具 ================= */
+ Spacer(Modifier.height(20.dp))
+ /* ================= Agent页外观 ================= */
+ //
+ //用户要的：Agent页的玻璃参数跟**主题**分开，改的入口在这儿。
+ //主题里那几根滑块管首页 /设置页 /终端页，这一份只管 Agent页。
+ Spacer(Modifier.height(20.dp))
+ Label("Agent页外观（跟主题分开）")
+
+ Row(
+ Modifier
+ .fillMaxWidth()
+ .clip(RoundedCornerShape(12.dp))
+ .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+ .clickable { AgentGlassPrefs.updateLiquid(!AgentGlassPrefs.liquid) }
+ .padding(horizontal =14.dp, vertical =13.dp),
+ verticalAlignment = Alignment.CenterVertically,
+ ) {
+ Column(Modifier.weight(1f)) {
+ Text("液态玻璃", fontSize =13.sp)
+ Spacer(Modifier.height(2.dp))
+ Text(
+ if (AgentGlassPrefs.liquid) "真折射，实时采样背景"
+ else "纯2D叠层，零 GPU折射 ——出问题时的退路",
+ fontSize =10.5.sp,
+ color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+ )
+ }
+ Text(
+ if (AgentGlassPrefs.liquid) "已开" else "已关",
+ fontSize =12.5.sp,
+ color = MiuixTheme.colorScheme.primary,
+ )
+ }
+
+ if (AgentGlassPrefs.liquid) {
+ SliderPreference(
+ value = AgentGlassPrefs.blur,
+ onValueChange = { AgentGlassPrefs.updateBlur(it) },
+ title = "模糊",
+ summary = "背景透过卡片被糊掉的程度",
+ valueText = AgentGlassPrefs.blur.toInt().toString() + " dp",
+ valueRange =0f..40f,
+ steps =7,
+ )
+ SliderPreference(
+ value = AgentGlassPrefs.lens,
+ onValueChange = { AgentGlassPrefs.updateLens(it) },
+ title = "折射深度",
+ summary = "边缘那道液态折射的强度",
+ valueText = AgentGlassPrefs.lens.toInt().toString() + " dp",
+ valueRange =0f..40f,
+ steps =7,
+ )
+ SliderPreference(
+ value = AgentGlassPrefs.alpha,
+ onValueChange = { AgentGlassPrefs.updateAlpha(it) },
+ title = "面板不透明度",
+ summary = "越小越透，越大字越清楚",
+ valueText = String.format("%.2f", AgentGlassPrefs.alpha),
+ valueRange =0.10f..0.95f,
+ steps =7,
+ )
+ SliderPreference(
+ value = AgentGlassPrefs.radius.toFloat(),
+ onValueChange = { AgentGlassPrefs.updateRadius(it.toInt()) },
+ title = "圆角",
+ summary = "Agent页卡片和输入栏的圆角",
+ valueText = AgentGlassPrefs.radius.toString() + " dp",
+ valueRange =0f..36f,
+ steps =8,
+ )
+ }
+
+ /* =================联网搜索 ================= */
+ Spacer(Modifier.height(20.dp))
+ Label("联网搜索")
+
+ Row(
+ Modifier
+ .fillMaxWidth()
+ .clip(RoundedCornerShape(12.dp))
+ .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+ .clickable { AgentGlassPrefs.updateWebSearch(!AgentGlassPrefs.webSearch) }
+ .padding(horizontal =14.dp, vertical =13.dp),
+ verticalAlignment = Alignment.CenterVertically,
+ ) {
+ Column(Modifier.weight(1f)) {
+ Text("让 Agent能联网搜", fontSize =13.sp)
+ Spacer(Modifier.height(2.dp))
+ Text(
+ if (AgentGlassPrefs.webSearch)
+ "已开：它多一个 web_search工具，回的是标题 +链接"
+ else
+ "关着的时候这个工具根本不发给模型，提示词也短一截",
+ fontSize =10.5.sp,
+ color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+ )
+ }
+ Box(
+ Modifier
+ .clip(RoundedCornerShape(50))
+ .background(
+ if (AgentGlassPrefs.webSearch) MiuixTheme.colorScheme.primary
+ else MiuixTheme.colorScheme.onSurfaceVariantSummary
+ .copy(alpha =0.22f)
+ )
+ .padding(horizontal =11.dp, vertical =4.dp),
+ ) {
+ Text(
+ if (AgentGlassPrefs.webSearch) "开" else "关",
+ fontSize =11.sp,
+ color = if (AgentGlassPrefs.webSearch) MiuixTheme.colorScheme.onPrimary
+ else MiuixTheme.colorScheme.onSurface,
+ )
+ }
+ }
+
+ if (AgentGlassPrefs.webSearch) {
+ Spacer(Modifier.height(8.dp))
+ Row(
+ Modifier
+ .fillMaxWidth()
+ .clip(RoundedCornerShape(12.dp))
+ .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+ .clickable {
+ AgentGlassPrefs.updateSearchEngine(
+ if (AgentGlassPrefs.searchEngine == "baidu") "bing" else "baidu"
+ )
+ }
+ .padding(horizontal =14.dp, vertical =13.dp),
+ verticalAlignment = Alignment.CenterVertically,
+ ) {
+ Column(Modifier.weight(1f)) {
+ Text("搜索引擎", fontSize =13.sp)
+ Spacer(Modifier.height(2.dp))
+ Text(
+ "这台机器上实测通的只有这两家",
+ fontSize =10.5.sp,
+ color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+ )
+ }
+ Text(
+ if (AgentGlassPrefs.searchEngine == "baidu") "百度" else "必应",
+ fontSize =12.5.sp,
+ color = MiuixTheme.colorScheme.primary,
+ )
+ }
+ }
+
+ Label("工具（只对当前会话）")
+ ToolSection(ctx, AgentStore.activeConvId)
             /* ================= 人格 ================= */
             Spacer(Modifier.height(20.dp))
             Label("人格")
@@ -328,7 +482,7 @@ fun AgentConfigScreen(
 
         Sheet.MaxToken -> BottomSheet(title = "最大回复长度", onDismiss = { sheetType = "" }) {
             listOf(
-                1_000_000 to "不限（默认）",
+                0 to "不限（默认）",
                 128_000 to "128k",
                 32_768 to "32k",
                 8_192 to "8k",

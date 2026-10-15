@@ -159,6 +159,20 @@ object AgentRunner {
         else ToolResult(false, "提权执行失败（su 没拿到？）")
     }
 
+	/**
+	 *同步跑一条命令 ——给**拿不到协程**的调用方用。
+	 *
+	 *谁需要它：本地功能的悬浮窗（跑在 Service的裸 Thread里）、
+	 *页面里那些「进页面就跑一次」的 list块。它们都没法 await。
+	 *
+	 * ⚠️别在 UI线程调它 ——它会 runBlocking把当前线程堵住。
+	 */
+	fun shellBlocking(ctx: Context, command: String, env: AgentEnv = AgentStore.env): String =
+		kotlinx.coroutines.runBlocking {
+			runCatching { shell(ctx, env, command).output }
+				.getOrElse { "执行失败：" + (it.message ?: it.javaClass.simpleName) }
+		}
+
     /** 读文件 */
     suspend fun readFile(ctx: Context, env: AgentEnv, path: String, maxBytes: Int = 200_000): ToolResult =
         withContext(Dispatchers.IO) {

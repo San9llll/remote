@@ -26,6 +26,8 @@ data class ChatMessage(
     val toolLog: List<String> = emptyList(),
     /** 结构化工具记录：name|label|brief|ok|chars|millis（用 | 拼，省得再引一层 JSON） */
     val toolSteps: List<String> = emptyList(),
+    /**这一轮的总用量（历史里也要能点开看，所以得落盘） */
+    val usage: AgentApi.Usage = AgentApi.Usage(),
 )
 
 /** 附件：图片走 base64 塞进 content，文本文件直接拼到正文前面 */
@@ -60,49 +62,26 @@ object AgentApi {
         return b + "/" + path
     }
 
-    suspend fun complete(history: List<ChatMessage>): String = withContext(Dispatchers.IO) {
-        val url = URL(endpoint(AgentStore.baseUrl, "chat/completions"))
-        val conn = (url.openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 20_000
-            readTimeout = TIMEOUT_MS
-            doOutput = true
-            setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            setRequestProperty("Authorization", "Bearer " + AgentStore.apiKey)
-            setRequestProperty("Accept", "application/json")
-        }
-
-        runCatching {
-            conn.outputStream.use { it.write(buildBody(history).toByteArray(Charsets.UTF_8)) }
-        }.getOrElse {
-            conn.disconnect()
-            throw IllegalStateException("连不上 " + url.host + "：" + (it.message ?: it.javaClass.simpleName))
-        }
-
-        val code = conn.responseCode
-        val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-        val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
-        // ⚠️ 这儿**故意不 disconnect**：正文已经读干净了，socket 会进 JDK 的
-        // keep-alive 缓存，下一条请求直接复用 —— 省掉一次 DNS + TCP + TLS 握手。
-        // 工具循环一轮一个请求，最多 8 轮，原来每轮都重新握手（首字延迟里
-        // 移动网络上一次握手就是两三百毫秒）。只有出错那条路才需要 disconnect。
-
-        if (code !in 200..299) {
-            val msg = runCatching {
-                JSONObject(body).optJSONObject("error")?.optString("message")
-            }.getOrNull()
-            throw IllegalStateException("HTTP " + code + "：" + (msg?.takeIf { it.isNotBlank() } ?: body.take(300)))
-        }
-
-        val text = runCatching {
-            JSONObject(body).optJSONArray("choices")
-                ?.optJSONObject(0)
-                ?.optJSONObject("message")
-                ?.optString("content")
-        }.getOrNull().orEmpty()
-
-        text.ifBlank { throw IllegalStateException("返回里没有内容：" + body.take(300)) }
-    }
+ suspend fun complete(history: List<ChatMessage>): String = withContext(Dispatchers.IO) {
+ //走流式（理由见 streamAt那段注释）：
+ //非流式那条路取消了，免得同一个请求在两处各写一遍、改一处忘一处。
+ val msgs = JSONArray()
+ history.forEach { m ->
+ if (m.text.isBlank()) return@forEach
+ msgs.put(JSONObject().put("role", m.role).put("content", m.text))
+ }
+ val r = streamAt(
+ baseUrl = AgentStore.baseUrl,
+ apiKey = AgentStore.apiKey,
+ model = AgentStore.model,
+ system = AgentStore.systemPromptNow,
+ messages = msgs,
+ tools = emptyList(),
+ temperature = AgentStore.temperature,
+ maxTokens = AgentStore.maxTokens,
+ )
+ r.text.ifBlank { throw IllegalStateException("流式读到底还是没有内容") }
+ }
 
     /**
      * 通用入口：自己给 baseUrl / key / model / 系统提示词。
@@ -110,55 +89,32 @@ object AgentApi {
      * 书柜要用"你是小说家"这类提示词，不能吃 Agent 页那套人格，
      * 所以单独开一个口子，配置还是从 AgentStore 取（用户只填一份）。
      */
-    suspend fun completeWith(
-        system: String,
-        history: List<ChatMessage>,
-        temperature: Float = 0.85f,
-        maxTokens: Int = 4096,
-        baseUrl: String = AgentStore.baseUrl,
-        apiKey: String = AgentStore.apiKey,
-        model: String = AgentStore.model,
-    ): String = withContext(Dispatchers.IO) {
-        val url = URL(endpoint(baseUrl, "chat/completions"))
-        val conn = (url.openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 20_000
-            readTimeout = TIMEOUT_MS
-            doOutput = true
-            setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            setRequestProperty("Authorization", "Bearer " + apiKey)
-            setRequestProperty("Accept", "application/json")
-        }
-
-        runCatching {
-            conn.outputStream.use { it.write(buildBody(system, history, temperature, maxTokens).toByteArray(Charsets.UTF_8)) }
-        }.getOrElse {
-            conn.disconnect()
-            throw IllegalStateException("连不上 " + url.host + "：" + (it.message ?: ""))
-        }
-
-        val code = conn.responseCode
-        val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-        val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
-        // ⚠️ 这儿**故意不 disconnect**：正文已经读干净了，socket 会进 JDK 的
-        // keep-alive 缓存，下一条请求直接复用 —— 省掉一次 DNS + TCP + TLS 握手。
-        // 工具循环一轮一个请求，最多 8 轮，原来每轮都重新握手（首字延迟里
-        // 移动网络上一次握手就是两三百毫秒）。只有出错那条路才需要 disconnect。
-
-        if (code !in 200..299) {
-            val msg = runCatching { JSONObject(body).optJSONObject("error")?.optString("message") }.getOrNull()
-            throw IllegalStateException("HTTP " + code + "：" + (msg?.takeIf { it.isNotBlank() } ?: body.take(300)))
-        }
-
-        val text = runCatching {
-            JSONObject(body).optJSONArray("choices")
-                ?.optJSONObject(0)
-                ?.optJSONObject("message")
-                ?.optString("content")
-        }.getOrNull().orEmpty()
-
-        text.ifBlank { throw IllegalStateException("返回里没有内容：" + body.take(300)) }
-    }
+ suspend fun completeWith(
+ system: String,
+ history: List<ChatMessage>,
+ temperature: Float =0.85f,
+ maxTokens: Int =4096,
+ baseUrl: String = AgentStore.baseUrl,
+ apiKey: String = AgentStore.apiKey,
+ model: String = AgentStore.model,
+ ): String = withContext(Dispatchers.IO) {
+ val msgs = JSONArray()
+ history.forEach { m ->
+ if (m.text.isBlank()) return@forEach
+ msgs.put(JSONObject().put("role", m.role).put("content", m.text))
+ }
+ val r = streamAt(
+ baseUrl = baseUrl,
+ apiKey = apiKey,
+ model = model,
+ system = system,
+ messages = msgs,
+ tools = emptyList(),
+ temperature = temperature,
+ maxTokens = maxTokens,
+ )
+ r.text.ifBlank { throw IllegalStateException("流式读到底还是没有内容") }
+ }
 
     /* ================= 流式（边想边说） ================= */
 
@@ -174,7 +130,41 @@ object AgentApi {
      *   - `reasoning`          OpenAI 系
      *   - `thinking`           有些中转站
      */
-    suspend fun stream(
+ suspend fun stream(
+ system: String,
+ messages: JSONArray,
+ tools: List<AgentTool>,
+ temperature: Float,
+ maxTokens: Int,
+ onReasoning: (String) -> Unit = {},
+ onDelta: (String) -> Unit = {},
+ ): Reply = streamAt(
+ baseUrl = AgentStore.baseUrl,
+ apiKey = AgentStore.apiKey,
+ model = AgentStore.model,
+ system = system,
+ messages = messages,
+ tools = tools,
+ temperature = temperature,
+ maxTokens = maxTokens,
+ onReasoning = onReasoning,
+ onDelta = onDelta,
+ )
+
+ /**
+ *真正的流式实现：走 SSE，一行一行吃 `data: {...}`。
+ *
+ *用户的要求：「Agent全局调用模型的流式输出接口」
+ *——所以 complete / completeWith / raw这几条**全都改走这里**，
+ *不再各自写一份"发一个 JSON收一个 JSON"的代码。
+ *好处是流式只实现一次：思考字段的三个别名、各家 tool_calls
+ *的增量拼接，只有这一处要维护；小说那边要的是整段文本，
+ *底下也是流式收的，不会碰上某些中转站不给非流式响应。
+ */
+ private suspend fun streamAt(
+ baseUrl: String,
+ apiKey: String,
+ model: String,
         system: String,
         messages: JSONArray,
         tools: List<AgentTool>,
@@ -183,22 +173,22 @@ object AgentApi {
         onReasoning: (String) -> Unit = {},
         onDelta: (String) -> Unit = {},
     ): Reply = withContext(Dispatchers.IO) {
-        val url = URL(endpoint(AgentStore.baseUrl, "chat/completions"))
+        val url = URL(endpoint(baseUrl, "chat/completions"))
         val conn = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 20_000
             readTimeout = TIMEOUT_MS
             doOutput = true
             setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            setRequestProperty("Authorization", "Bearer " + AgentStore.apiKey)
+            setRequestProperty("Authorization", "Bearer " + apiKey)
             setRequestProperty("Accept", "text/event-stream")
         }
 
         val root = JSONObject()
-        root.put("model", AgentStore.model)
+        root.put("model", model)
         root.put("temperature", temperature.toDouble())
         // 0 或不传 = 不限。有些家对超大值会直接报错，所以干脆不带这个字段
-        if (maxTokens > 0) root.put("max_tokens", maxTokens)
+ if (maxTokens >0) root.put("max_tokens", maxTokens)
         root.put("stream", true)
 
         val list = JSONArray()
@@ -341,93 +331,22 @@ object AgentApi {
      * 直接把 messages 数组发出去（工具循环里要拼 tool_calls / tool 这些角色，
      * 用 [ChatMessage] 那种简单模型表达不了）。
      */
-    suspend fun raw(
-        system: String,
-        messages: JSONArray,
-        tools: List<AgentTool>,
-        temperature: Float,
-        maxTokens: Int,
-    ): Reply = withContext(Dispatchers.IO) {
-        val url = URL(endpoint(AgentStore.baseUrl, "chat/completions"))
-        val conn = (url.openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 20_000
-            readTimeout = TIMEOUT_MS
-            doOutput = true
-            setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            setRequestProperty("Authorization", "Bearer " + AgentStore.apiKey)
-        }
-
-        val root = JSONObject()
-        root.put("model", AgentStore.model)
-        root.put("temperature", temperature.toDouble())
-        if (maxTokens > 0) root.put("max_tokens", maxTokens)
-        root.put("stream", false)
-
-        val list = JSONArray()
-        if (system.isNotBlank()) list.put(JSONObject().put("role", "system").put("content", system))
-        for (i in 0 until messages.length()) list.put(messages.get(i))
-        root.put("messages", list)
-
-        if (tools.isNotEmpty()) {
-            root.put("tools", JSONArray().also { a -> tools.forEach { a.put(it.toJson()) } })
-            root.put("tool_choice", "auto")
-        }
-
-        runCatching {
-            conn.outputStream.use { it.write(root.toString().toByteArray(Charsets.UTF_8)) }
-        }.getOrElse {
-            conn.disconnect()
-            throw IllegalStateException("连不上 " + url.host + "：" + (it.message ?: ""))
-        }
-
-        val startedAt = System.currentTimeMillis()
-        val code = conn.responseCode
-        val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
-            ?.bufferedReader()?.use { it.readText() }.orEmpty()
-        val elapsed = System.currentTimeMillis() - startedAt
-        // 不 disconnect，留给下一条请求复用（见上面 complete 那段注释）
-        if (code !in 200..299) {
-            val msg = runCatching { JSONObject(body).optJSONObject("error")?.optString("message") }.getOrNull()
-            throw IllegalStateException("HTTP " + code + "：" + (msg?.takeIf { it.isNotBlank() } ?: body.take(300)))
-        }
-
-        val json = JSONObject(body)
-        val msg = runCatching {
-            json.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message")
-        }.getOrNull() ?: throw IllegalStateException("返回里没有 message")
-
-        // 用量：prompt_tokens_details.cached_tokens 是命中缓存那部分
-        val usage = runCatching {
-            val u = json.optJSONObject("usage")
-            val prompt = u?.optInt("prompt_tokens", 0) ?: 0
-            val cached = u?.optJSONObject("prompt_tokens_details")?.optInt("cached_tokens", 0)
-                ?: u?.optInt("prompt_cache_hit_tokens", 0)
-                ?: 0
-            Usage(
-                cachedTokens = cached,
-                inputTokens = (prompt - cached).coerceAtLeast(0),
-                outputTokens = u?.optInt("completion_tokens", 0) ?: 0,
-                millis = elapsed,
-            )
-        }.getOrDefault(Usage(millis = elapsed))
-
-        val text = msg.optString("content", "")
-        val calls = mutableListOf<Call>()
-        msg.optJSONArray("tool_calls")?.let { arr ->
-            for (i in 0 until arr.length()) {
-                val o = arr.optJSONObject(i) ?: continue
-                val fn = o.optJSONObject("function") ?: continue
-                val name = fn.optString("name", "")
-                if (name.isBlank()) continue
-                val argsRaw = fn.optString("arguments", "{}")
-                val args = runCatching { JSONObject(argsRaw) }.getOrElse { JSONObject() }
-                calls += Call(o.optString("id", "call_" + i), name, args)
-            }
-        }
-
-        Reply(text, calls, usage)
-    }
+ suspend fun raw(
+ system: String,
+ messages: JSONArray,
+ tools: List<AgentTool>,
+ temperature: Float,
+ maxTokens: Int,
+ ): Reply = streamAt(
+ baseUrl = AgentStore.baseUrl,
+ apiKey = AgentStore.apiKey,
+ model = AgentStore.model,
+ system = system,
+ messages = messages,
+ tools = tools,
+ temperature = temperature,
+ maxTokens = maxTokens,
+ )
 
     /** 问服务商有哪些模型（GET /v1/models） */
     suspend fun listModels(): Result<List<String>> = withContext(Dispatchers.IO) {
@@ -521,7 +440,7 @@ object AgentApi {
         val root = JSONObject()
         root.put("model", AgentStore.model)
         root.put("temperature", temperature.toDouble())
-        root.put("max_tokens", maxTokens)
+ if (maxTokens >0) root.put("max_tokens", maxTokens)
         root.put("stream", false)
         val messages = JSONArray()
         if (system.isNotBlank()) {
@@ -538,7 +457,7 @@ object AgentApi {
         val root = JSONObject()
         root.put("model", AgentStore.model)
         root.put("temperature", AgentStore.temperature.toDouble())
-        root.put("max_tokens", AgentStore.maxTokens)
+ if (AgentStore.maxTokens >0) root.put("max_tokens", AgentStore.maxTokens)
         root.put("stream", false)
 
         val messages = JSONArray()

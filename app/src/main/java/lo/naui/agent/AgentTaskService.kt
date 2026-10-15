@@ -81,7 +81,7 @@ class AgentTaskService : Service() {
         val convId = intent.getStringExtra(EXTRA_CONV) ?: return
         val system = intent.getStringExtra(EXTRA_SYSTEM).orEmpty()
         val env = AgentEnv.of(intent.getStringExtra(EXTRA_ENV))
-        val maxTokens = intent.getIntExtra(EXTRA_MAX_TOKENS, 1_000_000)
+ val maxTokens = intent.getIntExtra(EXTRA_MAX_TOKENS,0)
         val temperature = intent.getFloatExtra(EXTRA_TEMP, 0.7f)
 
         // ⚠️ 历史**不能**塞在 Intent 里 —— Binder 有 1MB 上限，对话一长就抛
@@ -110,7 +110,7 @@ class AgentTaskService : Service() {
         )
 
         try {
-        result
+ result
             .onSuccess { run ->
                 AgentTaskStore.finish(
                     AgentTaskStore.Result(
@@ -122,6 +122,7 @@ class AgentTaskService : Service() {
                         ok = true,
                         reasoning = run.reasoning,
                         steps = run.steps,
+                        timeline = run.timeline,
                     )
                 )
                 notify(buildNotification("想完了"))

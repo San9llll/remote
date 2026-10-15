@@ -8,14 +8,6 @@ android {
     compileSdk = 37
 
     // 终端要真 PTY，只能靠 native 里的 forkpty
-    ndkVersion = "27.3.13750724"
-
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
-        }
-    }
 
     defaultConfig {
         applicationId = "lo.naui"
@@ -29,8 +21,8 @@ android {
         //   1.00.0 → 100    1.01.0 → 101    1.02.0 → 102 ……
         // tag 打成 v1.XX（UpdateChecker.isNewer 按 "." 逐段比数字，
         // "1.01" 和 "1.01.0" 比出来是相等，不会误报有新版）。
-        versionCode = 102
-        versionName = "1.02.0"
+        versionCode =111
+        versionName = "1.11.0"
 
         // 只打 arm64-v8a。
         // 一来机器就是 arm64，多带别的 ABI 纯属白占体积；
@@ -38,13 +30,6 @@ android {
         // 混进旧的其它 ABI 库最容易在启动时炸在这儿。
         ndk {
             abiFilters += listOf("arm64-v8a")
-        }
-
-        externalNativeBuild {
-            cmake {
-                // 只编 C，不需要 C++ 运行时
-                arguments += listOf("-DANDROID_STL=none")
-            }
         }
     }
 
@@ -67,7 +52,13 @@ android {
 
     // targetSdk 故意留在 28（绕开 Android 10+ 的 exec 限制），
     // 但 lint 会拿"上架 Google Play 要 33"来卡我们 —— 自己用的，关掉这条。
-    lint {
+    packaging {
+ // jniLibs里的 .so是本机 clang编好的，别再让 AGP拿 NDK的
+ // llvm-strip去处理（那是 x86_64的，在这台机器上跑不了）
+ jniLibs { keepDebugSymbols += "**/*.so" }
+ }
+
+ lint {
         disable += "ExpiredTargetSdkVersion"
         abortOnError = false
         checkReleaseBuilds = false
